@@ -1,0 +1,26 @@
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# build
+dist/
+build/
+bin/
+out/
+*.exe
+*.dll
+*.so
+*.dylib
+
