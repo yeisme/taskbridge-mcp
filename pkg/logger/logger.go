@@ -10,17 +10,17 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// LogLevel defines the logging level
+// LogLevel defines the logging level.
 type LogLevel = zapcore.Level
 
-// Global logger instance
+// Global logger instance.
 var (
 	globalLogger *zap.Logger
 	globalSugar  *zap.SugaredLogger
 	logMutex     sync.RWMutex
 )
 
-// LogConfig holds the logger configuration
+// LogConfig holds the logger configuration.
 type LogConfig struct {
 	// Log level (debug, info, warn, error, dpanic, panic, fatal)
 	Level LogLevel
@@ -53,7 +53,7 @@ type LogConfig struct {
 	AddStacktrace bool
 }
 
-// DefaultLogConfig returns the default logger configuration
+// DefaultLogConfig returns the default logger configuration.
 func DefaultLogConfig() *LogConfig {
 	homeDir, _ := os.UserHomeDir()
 	// 日志目录使用固定路径，每次启动时创建新的日志文件（带时间戳）
@@ -73,7 +73,7 @@ func DefaultLogConfig() *LogConfig {
 	}
 }
 
-// Init initializes the global logger
+// Init initializes the global logger.
 func Init(cfg *LogConfig) error {
 	if cfg == nil {
 		cfg = DefaultLogConfig()
@@ -146,106 +146,113 @@ func Init(cfg *LogConfig) error {
 
 	logMutex.Lock()
 	defer logMutex.Unlock()
+
 	globalLogger = logger
 
 	return nil
 }
 
-// GetLogger returns the global logger
+// GetLogger returns the global logger.
 func GetLogger() *zap.Logger {
 	logMutex.RLock()
 	defer logMutex.RUnlock()
+
 	if globalLogger == nil {
 		// Initialize with default config if not already initialized
 		_ = Init(DefaultLogConfig())
 		return globalLogger
 	}
+
 	return globalLogger
 }
 
-// GetSugaredLogger returns the global sugared logger (easier to use)
+// GetSugaredLogger returns the global sugared logger (easier to use).
 func GetSugaredLogger() *zap.SugaredLogger {
 	logMutex.RLock()
 	defer logMutex.RUnlock()
+
 	if globalSugar == nil {
 		// Initialize with default config if not already initialized
 		_ = Init(DefaultLogConfig())
 		return globalSugar
 	}
+
 	return globalSugar
 }
 
-// Sync flushes the logger
+// Sync flushes the logger.
 func Sync() error {
 	logMutex.RLock()
 	defer logMutex.RUnlock()
+
 	if globalLogger != nil {
 		return globalLogger.Sync()
 	}
+
 	return nil
 }
 
-// Debug logs a debug message
+// Debug logs a debug message.
 func Debug(msg string, fields ...zap.Field) {
 	GetLogger().Debug(msg, fields...)
 }
 
-// Debugf logs a formatted debug message
+// Debugf logs a formatted debug message.
 func Debugf(format string, args ...any) {
 	GetSugaredLogger().Debugf(format, args...)
 }
 
-// Info logs an info message
+// Info logs an info message.
 func Info(msg string, fields ...zap.Field) {
 	GetLogger().Info(msg, fields...)
 }
 
-// Infof logs a formatted info message
+// Infof logs a formatted info message.
 func Infof(format string, args ...any) {
 	GetSugaredLogger().Infof(format, args...)
 }
 
-// Warn logs a warning message
+// Warn logs a warning message.
 func Warn(msg string, fields ...zap.Field) {
 	GetLogger().Warn(msg, fields...)
 }
 
-// Warnf logs a formatted warning message
+// Warnf logs a formatted warning message.
 func Warnf(format string, args ...any) {
 	GetSugaredLogger().Warnf(format, args...)
 }
 
-// Error logs an error message
+// Error logs an error message.
 func Error(msg string, fields ...zap.Field) {
 	GetLogger().Error(msg, fields...)
 }
 
-// Errorf logs a formatted error message
+// Errorf logs a formatted error message.
 func Errorf(format string, args ...any) {
 	GetSugaredLogger().Errorf(format, args...)
 }
 
-// Fatal logs a fatal message and exits
+// Fatal logs a fatal message and exits.
 func Fatal(msg string, fields ...zap.Field) {
 	GetLogger().Fatal(msg, fields...)
 }
 
-// Fatalf logs a formatted fatal message and exits
+// Fatalf logs a formatted fatal message and exits.
 func Fatalf(format string, args ...any) {
 	GetSugaredLogger().Fatalf(format, args...)
 }
 
-// WithFields returns a logger with additional fields
+// WithFields returns a logger with additional fields.
 func WithFields(fields ...zap.Field) *zap.Logger {
 	return GetLogger().With(fields...)
 }
 
-// WithValues returns a sugared logger with additional key-value pairs
+// WithValues returns a sugared logger with additional key-value pairs.
 func WithValues(args ...any) *zap.SugaredLogger {
 	return GetSugaredLogger().With(args...)
 }
 
-// GetLogDirectory returns the current log directory
+// GetLogDirectory returns the current log directory.
 func GetLogDirectory() string {
 	cfg := DefaultLogConfig()
 	return cfg.LogDir

@@ -1,0 +1,64 @@
+version: "2"
+
+linters:
+  default: fast
+  disable:
+    - depguard
+    - wsl
+    - nlreturn
+    - gochecknoinits
+    - godox
+    - mnd
+  enable:
+    - wsl_v5
+    - tagalign
+    - errcheck
+    - iface
+    - embeddedstructfieldcheck
+    - funcorder
+
+  settings:
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      disable-default-exclusions: false
+      verbose: true
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - (io.Closer).Close
+    lll:
+      tab-width: 4
+      line-length: 160
+    iface:
+      enable:
+        - identical
+        - unused
+        - unexported
+    funlen:
+      lines: 120
+      statements: 100
+      ignore-comments: true
+    cyclop:
+      max-complexity: 20
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+  settings:
+    gci:
+      sections:
+        - standard # 标准部分：捕获所有标准包
+        - default # 默认部分：包含所有无法匹配到其他部分类型的导入
+        - prefix(github.com/yeisme/notevault) # 自定义部分：将所有具有指定前缀的导入分组
+    gofmt:
+      simplify: false
+      rewrite-rules:
+        - pattern: "interface{}"
+          replacement: "any"

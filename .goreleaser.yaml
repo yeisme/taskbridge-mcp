@@ -1,0 +1,61 @@
+project_name: taskbridge-mcp
+env:
+  - GO111MODULE=on
+  - CGO_ENABLED=0
+
+git:
+  ignore_tags:
+    - rc
+    - beta
+    - alpha
+
+builds:
+  - id: taskbridge-mcp
+    main: ./cmd/taskbridge-mcp
+    binary: taskbridge-mcp
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s
+      - -w
+      - -X github.com/yeisme/taskbridge-mcp/pkg/info.GitCommit={{ .Commit }}
+      - -X github.com/yeisme/taskbridge-mcp/pkg/info.GitTag={{ .Tag }}
+      - -X github.com/yeisme/taskbridge-mcp/pkg/info.BuildDate={{ .CommitDate }}
+      - -X github.com/yeisme/taskbridge-mcp/pkg/info.Version={{ .Version }}
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: binary
+    files:
+      - LICENSE
+      - README.md
+      - docs/
+
+release:
+  disable: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+brews:
+  - repository:
+      owner: yeisme
+      name: homebrew-taskbridge-mcp
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: https://github.com/yeisme/taskbridge-mcp
+    description: "TaskBridge MCP - 统一任务管理系统与 AI 助手的桥梁"
+    license: MIT
+    test: |
+      system "#{bin}/taskbridge-mcp --version"

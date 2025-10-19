@@ -1,0 +1,201 @@
+version: "3"
+
+vars:
+  # Git information
+  GIT_COMMIT:
+    sh: |
+      {{if eq OS "windows"}}
+        git rev-parse HEAD 2>&1 | findstr /v "fatal" || echo "unknown"
+      {{else}}
+        git rev-parse HEAD 2>/dev/null || echo "unknown"
+      {{end}}
+  GIT_TAG:
+    sh: |
+      {{if eq OS "windows"}}
+        git describe --tags --abbrev=0 2>&1 | findstr /v "fatal" || echo "unknown"
+      {{else}}
+        git describe --tags --abbrev=0 2>/dev/null || echo "unknown"
+      {{end}}
+  BUILD_DATE:
+    sh: |
+      {{if eq OS "windows"}}
+        powershell -Command "[System.DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')"
+      {{else}}
+        date -u +"%Y-%m-%dT%H:%M:%SZ"
+      {{end}}
+
+  # Version
+  VERSION: '{{ if eq .GIT_TAG "unknown" }}dev{{ else }}{{ .GIT_TAG }}{{ end }}'
+
+  # Binary name
+  BINARY_NAME: '{{ if eq OS "windows" }}taskbridge-mcp.exe{{ else }}taskbridge-mcp{{ end }}'
+
+  # LDFLAGS
+  MODULE: github.com/yeisme/taskbridge-mcp
+  LDFLAGS: '-s -w -X "{{ .MODULE }}/pkg/info.GitCommit={{ .GIT_COMMIT }}" -X "{{ .MODULE }}/pkg/info.GitTag={{ .GIT_TAG }}" -X "{{ .MODULE }}/pkg/info.BuildDate={{ .BUILD_DATE }}" -X "{{ .MODULE }}/pkg/info.Version={{ .VERSION }}"'
+
+tasks:
+  default:
+    cmds:
+      - task: help
+
+  help:
+    desc: "Show help information"
+    silent: true
+    cmds:
+      - task --list
+
+  # Show build information
+  info:
+    desc: "Show build information"
+    silent: true
+    cmds:
+      - |
+        echo "=== Build Information ==="
+        echo "Version:     {{ .VERSION }}"
+        echo "Git Commit:  {{ .GIT_COMMIT }}"
+        echo "Git Tag:     {{ .GIT_TAG }}"
+        echo "Build Date:  {{ .BUILD_DATE }}"
+        echo "OS/Arch:     {{ OS }}/{{ ARCH }}"
+        echo ""
+
+  # Build development version
+  build:
+    desc: "Build development version for current platform"
+    cmds:
+      - echo "Compiling..."
+      - goreleaser build --snapshot --single-target --clean
+      - echo "✓ Build completed"
+
+  build:hot:
+    desc: "Build development version for current platform with hot reload"
+    cmds:
+      - echo "Compiling with hot reload..."
+      - task: build
+    
+
+  build:all:
+    desc: "Build for all platforms"
+    cmds:
+      - echo "Compiling for all platforms..."
+      - goreleaser build --clean
+      - echo "✓ Build completed"
+
+  # Build using GoReleaser
+  build:release:
+    desc: "Build all platforms using GoReleaser"
+    cmds:
+      - echo "Building with GoReleaser..."
+      - goreleaser release --clean --skip=publish
+      - echo "✓ Build completed"
+
+  # Build and run
+  run:
+    desc: "Build and run"
+    cmds:
+      - task: build
+      - echo ""
+      - echo "Running application..."
+      - ./{{ .BINARY_NAME }} --version
+      - ./{{ .BINARY_NAME }} server start
+
+  # Unit tests
+  test:
+    desc: "Run unit tests"
+    cmds:
+      - echo "Running unit tests..."
+      - go test -v -race -timeout=5m ./...
+      - echo "✓ Tests completed"
+
+  # Test coverage
+  test:coverage:
+    desc: "Show test coverage"
+    cmds:
+      - |
+        echo "Generating coverage report..."
+        go test -v -race -coverprofile=coverage.out ./...
+        go tool cover -func=coverage.out | tail -1
+        echo "Detailed report: coverage.out"
+
+  # Code linting and formatting
+  lint:
+    desc: "Code linting (using golangci-lint)"
+    cmds:
+      - golangci-lint run --fix
+
+  # Code formatting
+  fmt:
+    desc: "Code formatting (using golangci-lint)"
+    cmds:
+      - task: install:linter
+      - |
+        echo "Formatting code..."
+        golangci-lint fmt 
+        echo "✓ Formatting completed"
+
+  # Install golangci-lint v2
+  install:linter:
+    desc: "Install golangci-lint v2"
+    cmds:
+      - |
+        echo "Find and install golangci-lint v2 if not present..."
+        {{if eq OS "windows"}}
+          powershell -Command "if (-not (Get-Command golangci-lint -ErrorAction SilentlyContinue)) { Write-Host 'Installing golangci-lint v2...'; go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.0; Write-Host '✓ golangci-lint v2 installed' } else { Write-Host 'golangci-lint is already installed.' }"
+        {{else}}
+          if ! command -v golangci-lint &> /dev/null; then
+            echo "Installing golangci-lint v2..."
+            go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0
+            echo "✓ golangci-lint v2 installed"
+          else
+            echo "golangci-lint is already installed."
+          fi
+        {{end}}
+
+  # Download dependencies
+  deps:
+    desc: "Download dependencies"
+    cmds:
+      - echo "Downloading dependencies..."
+      - go mod download
+      - echo "✓ Dependencies downloaded"
+
+  # Tidy dependencies
+  tidy:
+    desc: "Tidy dependencies"
+    cmds:
+      - echo "Tidying dependencies..."
+      - go mod tidy
+      - echo "✓ Dependencies tidied"
+
+  # Clean
+  clean:
+    desc: "Clean build artifacts"
+    cmds:
+      - echo "Cleaning..."
+      - |
+        {{if eq OS "windows"}}
+          powershell -Command "Get-Item -Path '{{ .BINARY_NAME }}' -ErrorAction SilentlyContinue | Remove-Item -Force"
+          powershell -Command "Get-Item -Path 'taskbridge-mcp.exe' -ErrorAction SilentlyContinue | Remove-Item -Force"
+          powershell -Command "Get-Item -Path 'coverage.out' -ErrorAction SilentlyContinue | Remove-Item -Force"
+          powershell -Command "Get-Item -Path 'dist' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force"
+        {{else}}
+          rm -f {{ .BINARY_NAME }}
+          rm -f taskbridge-mcp.exe
+          rm -f coverage.out
+          rm -rf dist/
+        {{end}}
+      - go clean -cache -testcache
+      - echo "✓ Cleanup completed"
+
+  # CI workflow
+  ci:
+    desc: "Complete CI workflow"
+    cmds:
+      - task: tidy
+      - task: deps
+      - task: fmt
+      - task: lint
+      - task: test:coverage
+      - task: build
+      - echo ""
+      - echo "✓ CI workflow completed"
