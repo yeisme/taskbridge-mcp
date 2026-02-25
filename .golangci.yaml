@@ -1,0 +1,36 @@
+# .golangci.yaml
+version: "2"
+
+linters:
+  enable:
+    - govet # Go 官方提供的代码诊断工具
+    - staticcheck # 强大的静态分析工具集
+    - unused # 检查未使用的代码
+    - ineffassign # 检查无效的赋值
+    - gocyclo # 检查函数/方法的圈复杂度
+    - revive # golint 的一个快速、可配置的替代品
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      disable-default-exclusions: false
+      verbose: false
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Println
+        - fmt.Printf
+        - (*os.File).Close
+    gocyclo:
+      min-complexity: 40
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

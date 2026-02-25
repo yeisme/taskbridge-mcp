@@ -1,0 +1,112 @@
+version: "3"
+
+tasks:
+  # Goreleaser 任务
+  snapshot:
+    desc: 使用 goreleaser 构建快照版本（仅当前系统架构）
+    cmds:
+      - goreleaser build --snapshot --clean --single-target
+
+  build:
+    desc: 使用 goreleaser 构建正式版本
+    cmds:
+      - goreleaser build --clean
+
+  release:
+    desc: 使用 goreleaser 发布版本
+    cmds:
+      - goreleaser release --clean
+
+  # Golangci-lint 任务
+  fmt:
+    desc: 使用 golangci-lint 格式化代码
+    cmds:
+      - golangci-lint fmt
+
+  lint:
+    desc: 使用 golangci-lint 进行代码检查
+    cmds:
+      - golangci-lint run
+
+  lint-fix:
+    desc: 使用 golangci-lint 进行代码检查并自动修复
+    cmds:
+      - golangci-lint run --fix
+
+  # Docker 任务
+  docker:build:
+    desc: 构建 Docker 镜像
+    cmds:
+      - docker build -t taskbridge:latest .
+
+  docker:build-no-cache:
+    desc: 构建 Docker 镜像（不使用缓存）
+    cmds:
+      - docker build --no-cache -t taskbridge:latest .
+
+  docker:up:
+    desc: 启动 Docker 容器
+    cmds:
+      - docker compose up -d
+
+  docker:down:
+    desc: 停止 Docker 容器
+    cmds:
+      - docker compose down
+
+  docker:logs:
+    desc: 查看 Docker 容器日志
+    cmds:
+      - docker compose logs -f taskbridge
+
+  docker:ps:
+    desc: 查看 Docker 容器状态
+    cmds:
+      - docker compose ps
+
+  docker:restart:
+    desc: 重启 Docker 容器
+    cmds:
+      - docker compose restart
+
+  docker:shell:
+    desc: 进入 Docker 容器 shell
+    cmds:
+      - docker compose exec taskbridge sh
+
+  docker:clean:
+    desc: 清理 Docker 资源（容器、镜像、卷）
+    cmds:
+      - docker compose down -v --rmi local
+
+  docker:dev:
+    desc: 开发模式 - 构建并启动容器
+    deps: [docker:build]
+    cmds:
+      - docker compose up -d
+
+  docker:full:
+    desc: 完整重建并启动（不使用缓存）
+    cmds:
+      - docker compose down
+      - docker build --no-cache -t taskbridge:latest .
+      - docker compose up -d
+
+  docker:mongodb:
+    desc: 启动包含 MongoDB 的完整服务
+    cmds:
+      - docker compose --profile mongodb up -d
+
+  # 组合任务
+  ci:
+    desc: 运行 CI 检查（fmt + lint + build）
+    deps: [fmt, lint]
+    cmds:
+      - goreleaser build --snapshot --clean
+
+  # 开发任务
+  dev:
+    desc: 开发模式 - 格式化并构建快照
+    deps: [fmt]
+    cmds:
+      - goreleaser build --snapshot -- clean

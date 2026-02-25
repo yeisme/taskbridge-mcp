@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+plans/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+taskbridge
+taskbridge.exe
+dist/
+build/
+
+# Data and logs
+data/
+logs/
+*.log
+*.db
+
+# Development files
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+token.json
+configs/config.local.yaml
+configs/secrets.yaml
+
+# Test and coverage
+coverage.txt
+coverage.html
+tmp/
+temp/
+vendor/
+
+# Docker
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
