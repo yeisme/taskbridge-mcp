@@ -4,15 +4,11 @@
 
 **连接 AI 与 Todo 软件的桥梁**
 
-[English](#english) | [简体中文](#简体中文)
-
 </div>
 
 ---
 
-## 简体中文
-
-### 项目简介
+## 项目简介
 
 TaskBridge 是一个 MCP (Model Context Protocol) 工具，旨在连接各种 Todo 软件与 AI，让 AI 能够：
 
@@ -191,39 +187,5 @@ taskbridge-mcp/
 欢迎贡献代码！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详情。
 
 ### 许可证
-
-MIT License
-
----
-
-## English
-
-### Overview
-
-TaskBridge is an MCP (Model Context Protocol) tool that connects various Todo applications with AI, enabling AI to:
-
-- 📋 **Understand Tasks** - Read and parse tasks from different Todo apps
-- 🔄 **Two-way Sync** - Support reading from and writing to Todo apps
-- 🎯 **Smart Analysis** - Provide quadrant analysis, priority calculation, etc.
-- 🤖 **AI Enhancement** - Provide task context for AI to better plan for users
-
-### Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/yeisme/taskbridge-mcp.git
-cd taskbridge-mcp
-
-# Install dependencies
-go mod tidy
-
-# Build
-go build -o taskbridge
-
-# Run
-./taskbridge --help
-```
-
-### License
 
 MIT License
