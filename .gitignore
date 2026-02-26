@@ -67,3 +67,7 @@ temp/
 # Coverage
 coverage.txt
 coverage.html
+
+# Local agent metadata
+.kilocode/
+.kilocodemodes

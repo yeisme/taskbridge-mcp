@@ -2,12 +2,12 @@ version: "3"
 
 tasks:
   # Goreleaser 任务
-  snapshot:
+  build:snapshot:
     desc: 使用 goreleaser 构建快照版本（仅当前系统架构）
     cmds:
       - goreleaser build --snapshot --clean --single-target
 
-  build:
+  build:release:
     desc: 使用 goreleaser 构建正式版本
     cmds:
       - goreleaser build --clean
