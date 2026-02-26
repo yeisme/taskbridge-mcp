@@ -78,6 +78,7 @@ type ProvidersConfig struct {
 	Google    ProviderConfig `mapstructure:"google"`
 	Feishu    ProviderConfig `mapstructure:"feishu"`
 	TickTick  ProviderConfig `mapstructure:"ticktick"`
+	Dida      ProviderConfig `mapstructure:"dida"`
 	Todoist   ProviderConfig `mapstructure:"todoist"`
 	OmniFocus ProviderConfig `mapstructure:"omnifocus"`
 	Apple     ProviderConfig `mapstructure:"apple"`
@@ -144,13 +145,14 @@ func DefaultConfig() *Config {
 		MCP: MCPConfig{
 			Enabled:   true,
 			Transport: "stdio",
-			Port:      8080,
+			Port:      14940,
 		},
 		Providers: ProvidersConfig{
 			Microsoft: ProviderConfig{Enabled: false},
 			Google:    ProviderConfig{Enabled: false},
 			Feishu:    ProviderConfig{Enabled: false},
 			TickTick:  ProviderConfig{Enabled: false},
+			Dida:      ProviderConfig{Enabled: false},
 			Todoist:   ProviderConfig{Enabled: false},
 			OmniFocus: ProviderConfig{Enabled: false},
 			Apple:     ProviderConfig{Enabled: false},

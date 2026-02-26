@@ -41,6 +41,13 @@ var providerDefinitions = map[string]ProviderDefinition{
 		Description: "TickTick 任务管理",
 		Aliases:     []string{"ticktick", "tick"},
 	},
+	"dida": {
+		Name:        "dida",
+		ShortName:   "tick_cn",
+		DisplayName: "Dida365",
+		Description: "滴答清单（国内）",
+		Aliases:     []string{"dida", "ticktick_cn", "tick-cn"},
+	},
 	"todoist": {
 		Name:        "todoist",
 		ShortName:   "todo",
@@ -85,7 +92,7 @@ func GetProviderDefinition(name string) (ProviderDefinition, bool) {
 // GetAllProviders 获取所有 Provider 定义（按固定顺序）
 func GetAllProviders() []ProviderDefinition {
 	result := make([]ProviderDefinition, 0, len(providerDefinitions))
-	order := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	order := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, name := range order {
 		if def, ok := providerDefinitions[name]; ok {
 			result = append(result, def)
