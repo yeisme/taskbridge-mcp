@@ -11,8 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yeisme/taskbridge/internal/auth"
+	"github.com/yeisme/taskbridge/internal/provider/feishu"
 	"github.com/yeisme/taskbridge/internal/provider/google"
 	microsoft "github.com/yeisme/taskbridge/internal/provider/microsoft"
+	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/pkg/paths"
 )
@@ -184,6 +186,29 @@ func registerProviders(tm *auth.TokenManager) {
 	} else {
 		fmt.Printf("⚠️ Todoist Provider 未配置: %v\n", err)
 	}
+
+	// 注册 Feishu Provider
+	if feishuProvider, err := createFeishuProvider(); err == nil {
+		tm.RegisterProvider(feishuProvider)
+		fmt.Printf("✅ 已注册 Provider: %s\n", feishuProvider.DisplayName())
+	} else {
+		fmt.Printf("⚠️ Feishu Provider 未配置: %v\n", err)
+	}
+
+	// 注册 TickTick Provider
+	if tickProvider, err := createTickTickProvider(); err == nil {
+		tm.RegisterProvider(tickProvider)
+		fmt.Printf("✅ 已注册 Provider: %s\n", tickProvider.DisplayName())
+	} else {
+		fmt.Printf("⚠️ TickTick Provider 未配置: %v\n", err)
+	}
+	// 注册 Dida Provider
+	if didaProvider, err := createDidaProvider(); err == nil {
+		tm.RegisterProvider(didaProvider)
+		fmt.Printf("✅ 已注册 Provider: %s\n", didaProvider.DisplayName())
+	} else {
+		fmt.Printf("⚠️ Dida Provider 未配置: %v\n", err)
+	}
 }
 
 // createGoogleProvider 创建 Google Provider
@@ -241,6 +266,66 @@ func createTodoistProvider() (*todoist.Provider, error) {
 
 	p, err := todoist.NewProvider(todoist.Config{
 		TokenFile: tokenPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Authenticate(context.Background(), nil); err != nil {
+		return nil, fmt.Errorf("认证失败: %w", err)
+	}
+	return p, nil
+}
+
+// createFeishuProvider 创建 Feishu Provider
+func createFeishuProvider() (*feishu.Provider, error) {
+	credentialsPath := paths.GetCredentialsPath("feishu")
+	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("凭证文件不存在")
+	}
+
+	p, err := feishu.NewProvider(feishu.Config{
+		CredentialsFile: credentialsPath,
+		TokenFile:       paths.GetTokenPath("feishu"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Authenticate(context.Background(), nil); err != nil {
+		return nil, fmt.Errorf("认证失败: %w", err)
+	}
+	return p, nil
+}
+
+// createTickTickProvider 创建 TickTick Provider
+func createTickTickProvider() (*ticktick.Provider, error) {
+	tokenPath := paths.GetTokenPath("ticktick")
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("token 文件不存在")
+	}
+
+	p, err := ticktick.NewProvider(ticktick.Config{
+		ProviderName: "ticktick",
+		TokenFile:    tokenPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Authenticate(context.Background(), nil); err != nil {
+		return nil, fmt.Errorf("认证失败: %w", err)
+	}
+	return p, nil
+}
+
+// createDidaProvider 创建 Dida Provider
+func createDidaProvider() (*ticktick.Provider, error) {
+	tokenPath := paths.GetTokenPath("dida")
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("token 文件不存在")
+	}
+
+	p, err := ticktick.NewProvider(ticktick.Config{
+		ProviderName: "dida",
+		TokenFile:    tokenPath,
 	})
 	if err != nil {
 		return nil, err

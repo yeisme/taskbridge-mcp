@@ -127,8 +127,16 @@ func getProviderInfos() map[string]ProviderInfo {
 			ShortName:   "tick",
 			DisplayName: "TickTick",
 			Description: "TickTick 任务管理",
-			AuthType:    "Username/Password",
+			AuthType:    "API Token",
 			Enabled:     cfg.Providers.TickTick.Enabled,
+		},
+		"dida": {
+			Name:        "dida",
+			ShortName:   "tick_cn",
+			DisplayName: "Dida365",
+			Description: "滴答清单（国内）",
+			AuthType:    "API Token",
+			Enabled:     cfg.Providers.Dida.Enabled,
 		},
 		"todoist": {
 			Name:        "todoist",
@@ -147,7 +155,7 @@ func runProviderList(_ *cobra.Command, _ []string) {
 	// 使用 lipgloss table 组件
 	table := ui.NewTable("名称", "简写", "状态", "认证方式", "描述")
 
-	order := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	order := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, name := range order {
 		p := providers[name]
 		// 获取实际认证状态
@@ -197,6 +205,8 @@ func runProviderEnable(_ *cobra.Command, args []string) {
 		cfg.Providers.Feishu.Enabled = true
 	case "ticktick":
 		cfg.Providers.TickTick.Enabled = true
+	case "dida":
+		cfg.Providers.Dida.Enabled = true
 	case "todoist":
 		cfg.Providers.Todoist.Enabled = true
 	}
@@ -229,6 +239,8 @@ func runProviderDisable(_ *cobra.Command, args []string) {
 		cfg.Providers.Feishu.Enabled = false
 	case "ticktick":
 		cfg.Providers.TickTick.Enabled = false
+	case "dida":
+		cfg.Providers.Dida.Enabled = false
 	case "todoist":
 		cfg.Providers.Todoist.Enabled = false
 	}
@@ -353,6 +365,15 @@ func getProviderCapabilities(providerName string) []string {
 			"子任务（有限支持）",
 		}
 	case "ticktick":
+		return []string{
+			"截止日期",
+			"任务列表",
+			"子任务",
+			"优先级",
+			"标签",
+			"提醒",
+		}
+	case "dida":
 		return []string{
 			"截止日期",
 			"任务列表",

@@ -58,7 +58,7 @@ func runLists(cmd *cobra.Command, args []string) {
 		resolvedSource = provider.ResolveProviderName(listsSource)
 		if !provider.IsValidProvider(resolvedSource) {
 			fmt.Printf("❌ 不支持的来源: %s\n", listsSource)
-			fmt.Println("支持的来源: google (g), microsoft (ms), feishu, ticktick (tick), todoist (todo)")
+			fmt.Println("支持的来源: google (g), microsoft (ms), feishu, ticktick (tick), dida (ticktick_cn), todoist (todo)")
 			os.Exit(1)
 		}
 	}

@@ -35,6 +35,7 @@ var rootCmd = &cobra.Command{
   - Google Tasks
   - 飞书任务
   - TickTick
+  - Dida365（滴答清单国内）
   - Todoist
   - OmniFocus (macOS)
   - Apple Reminders (macOS/iOS)

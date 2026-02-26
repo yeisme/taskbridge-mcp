@@ -10,8 +10,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yeisme/taskbridge/internal/provider"
+	"github.com/yeisme/taskbridge/internal/provider/feishu"
 	"github.com/yeisme/taskbridge/internal/provider/google"
 	"github.com/yeisme/taskbridge/internal/provider/microsoft"
+	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/internal/storage/filestore"
 	"github.com/yeisme/taskbridge/internal/sync"
@@ -202,6 +204,53 @@ func getSyncEngineForProvider(providerName string) (*sync.Engine, error) {
 		}
 	}
 
+	// 初始化 Feishu Provider
+	if providerName == "" || providerName == "feishu" {
+		feishuProvider, err := feishu.NewProviderFromHome()
+		if err != nil {
+			if providerName == "feishu" {
+				return nil, fmt.Errorf("初始化 Feishu Provider 失败: %w\n请运行 'taskbridge auth login feishu' 进行认证", err)
+			}
+		} else if !feishuProvider.IsAuthenticated() {
+			if providerName == "feishu" {
+				return nil, fmt.Errorf("feishu Provider 未认证，请运行 'taskbridge auth login feishu' 进行认证")
+			}
+		} else {
+			providers["feishu"] = feishuProvider
+		}
+	}
+
+	// 初始化 TickTick Provider
+	if providerName == "" || providerName == "ticktick" {
+		tickProvider, err := ticktick.NewProviderFromHomeByName("ticktick")
+		if err != nil {
+			if providerName == "ticktick" {
+				return nil, fmt.Errorf("初始化 TickTick Provider 失败: %w\n请运行 'taskbridge auth login ticktick' 进行认证", err)
+			}
+		} else if err := tickProvider.Authenticate(context.Background(), nil); err != nil {
+			if providerName == "ticktick" {
+				return nil, fmt.Errorf("ticktick Provider 未认证: %w\n请运行 'taskbridge auth login ticktick' 进行认证", err)
+			}
+		} else {
+			providers["ticktick"] = tickProvider
+		}
+	}
+	// 初始化 Dida Provider
+	if providerName == "" || providerName == "dida" {
+		didaProvider, err := ticktick.NewProviderFromHomeByName("dida")
+		if err != nil {
+			if providerName == "dida" {
+				return nil, fmt.Errorf("初始化 Dida Provider 失败: %w\n请运行 'taskbridge auth login dida' 进行认证", err)
+			}
+		} else if err := didaProvider.Authenticate(context.Background(), nil); err != nil {
+			if providerName == "dida" {
+				return nil, fmt.Errorf("dida Provider 未认证: %w\n请运行 'taskbridge auth login dida' 进行认证", err)
+			}
+		} else {
+			providers["dida"] = didaProvider
+		}
+	}
+
 	return sync.NewEngine(providers, store), nil
 }
 
@@ -328,7 +377,7 @@ func runSyncStatus(cmd *cobra.Command, args []string) {
 		printSyncStatus(status)
 	} else {
 		// 查询所有 Provider
-		providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+		providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 		for _, p := range providers {
 			status, err := engine.GetStatus(context.Background(), p)
 			if err != nil {
@@ -388,6 +437,7 @@ func printSyncStatus(status *sync.Status) {
 		"microsoft": "Microsoft Todo",
 		"feishu":    "飞书任务",
 		"ticktick":  "TickTick",
+		"dida":      "Dida365",
 		"todoist":   "Todoist",
 	}
 

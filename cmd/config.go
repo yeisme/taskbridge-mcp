@@ -225,6 +225,8 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 				value = cfg.Providers.Feishu
 			case "ticktick":
 				value = cfg.Providers.TickTick
+			case "dida":
+				value = cfg.Providers.Dida
 			case "todoist":
 				value = cfg.Providers.Todoist
 			default:

@@ -58,7 +58,7 @@ var listCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(listCmd)
 
-	listCmd.Flags().StringVarP(&listSource, "source", "s", "", "按来源筛选（google, microsoft, feishu, ticktick, todoist）")
+	listCmd.Flags().StringVarP(&listSource, "source", "s", "", "按来源筛选（google, microsoft, feishu, ticktick, dida, todoist）")
 	listCmd.Flags().StringVarP(&listStatus, "status", "t", "", "按状态筛选（todo, in_progress, completed, cancelled）")
 	listCmd.Flags().StringVarP(&listFormat, "format", "f", "table", "输出格式（table, json, markdown）")
 	listCmd.Flags().IntVarP(&listQuadrant, "quadrant", "q", 0, "按象限筛选（1-4）")
@@ -81,7 +81,7 @@ func runList(cmd *cobra.Command, args []string) {
 		resolvedSource = provider.ResolveProviderName(listSource)
 		if !provider.IsValidProvider(resolvedSource) {
 			fmt.Printf("❌ 不支持的来源: %s\n", listSource)
-			fmt.Println("支持的来源: google (g), microsoft (ms), feishu, ticktick (tick), todoist (todo)")
+			fmt.Println("支持的来源: google (g), microsoft (ms), feishu, ticktick (tick), dida (ticktick_cn), todoist (todo)")
 			os.Exit(1)
 		}
 	}
@@ -253,7 +253,6 @@ func printTable(tasks []model.Task) {
 	listW := flexibleW - titleW
 	if listW < minListW {
 		deficit := minListW - listW
-		listW = minListW
 		titleW -= deficit
 	}
 	if titleW < minTitleW {
@@ -333,7 +332,7 @@ func syncNowForList(ctx context.Context, source string) error {
 	}
 
 	// 未指定来源时，尽量同步已认证 Provider
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	var synced int
 	for _, p := range providers {
 		engine, err := getSyncEngineForProvider(p)
@@ -445,10 +444,6 @@ func statusShort(s model.TaskStatus) string {
 	default:
 		return string(s)
 	}
-}
-
-func truncate(s string, maxLen int) string {
-	return truncateDisplay(s, maxLen)
 }
 
 func detectTerminalWidth() int {

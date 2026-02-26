@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/provider"
 	"github.com/yeisme/taskbridge/internal/provider/google"
 	"github.com/yeisme/taskbridge/internal/provider/microsoft"
+	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/internal/storage/filestore"
 )
@@ -61,7 +63,7 @@ TaskBridge 作为 MCP 服务器，提供以下功能:
 
 示例:
   taskbridge mcp start
-  taskbridge mcp start --transport sse --port 8080`,
+  taskbridge mcp start --transport sse --port 14940`,
 }
 
 // mcpStartCmd 启动 MCP 服务
@@ -77,7 +79,7 @@ var mcpStartCmd = &cobra.Command{
 
 示例:
   taskbridge mcp start
-  taskbridge mcp start --transport sse --port 8080`,
+  taskbridge mcp start --transport sse --port 14940`,
 	Run: runMCPStart,
 }
 
@@ -104,7 +106,7 @@ func init() {
 	mcpCmd.AddCommand(mcpToolsCmd)
 
 	mcpStartCmd.Flags().StringVar(&mcpTransport, "transport", "stdio", "传输方式 (stdio, sse, streamable)")
-	mcpStartCmd.Flags().IntVarP(&mcpPort, "port", "p", 8080, "HTTP 端口（用于 sse/streamable 模式）")
+	mcpStartCmd.Flags().IntVarP(&mcpPort, "port", "p", 14940, "HTTP 端口（用于 sse/streamable 模式）")
 	mcpToolsCmd.Flags().BoolVar(&mcpToolsJSON, "json", false, "以 JSON 格式输出工具列表")
 }
 
@@ -590,12 +592,30 @@ func runMCPStart(cmd *cobra.Command, args []string) {
 			providers["todoist"] = todoistProvider
 		}
 	}
+	tickProvider, err := ticktick.NewProviderFromHomeByName("ticktick")
+	if err == nil {
+		if authErr := tickProvider.Authenticate(ctx, nil); authErr == nil {
+			providers["ticktick"] = tickProvider
+		}
+	}
+	didaProvider, err := ticktick.NewProviderFromHomeByName("dida")
+	if err == nil {
+		if authErr := didaProvider.Authenticate(ctx, nil); authErr == nil {
+			providers["dida"] = didaProvider
+		}
+	}
 
 	if _, ok := providers["microsoft"]; !ok && cfg.Providers.Microsoft.Enabled {
 		printToStderr("⚠️ Microsoft Provider 未就绪，请运行 'taskbridge auth login microsoft'\n")
 	}
 	if _, ok := providers["todoist"]; !ok && cfg.Providers.Todoist.Enabled {
 		printToStderr("⚠️ Todoist Provider 未就绪，请运行 'taskbridge auth login todoist'\n")
+	}
+	if _, ok := providers["ticktick"]; !ok && cfg.Providers.TickTick.Enabled {
+		printToStderr("⚠️ TickTick Provider 未就绪，请运行 'taskbridge auth login ticktick'\n")
+	}
+	if _, ok := providers["dida"]; !ok && cfg.Providers.Dida.Enabled {
+		printToStderr("⚠️ Dida Provider 未就绪，请运行 'taskbridge auth login dida'\n")
 	}
 
 	// 创建 MCP 服务器
@@ -633,6 +653,10 @@ func runMCPStart(cmd *cobra.Command, args []string) {
 
 	// 启动服务
 	if err := server.Start(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			printToStderr("👋 服务已停止\n")
+			return
+		}
 		printToStderr(fmt.Sprintf("❌ MCP 服务启动失败: %v\n", err))
 		os.Exit(1)
 	}
