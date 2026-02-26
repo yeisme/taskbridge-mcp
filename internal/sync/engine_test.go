@@ -438,14 +438,16 @@ func TestSyncPush(t *testing.T) {
 	store := NewMockStorage()
 
 	// 添加本地任务
-	store.SaveTask(context.Background(), &model.Task{
+	if err := store.SaveTask(context.Background(), &model.Task{
 		ID:        "local1",
 		Title:     "Local Task 1",
 		Status:    model.StatusTodo,
 		Source:    "local",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-	})
+	}); err != nil {
+		t.Fatalf("failed to seed local task: %v", err)
+	}
 
 	engine := NewEngine(providers, store)
 
@@ -485,14 +487,16 @@ func TestSyncBidirectional(t *testing.T) {
 	store := NewMockStorage()
 
 	// 添加本地任务
-	store.SaveTask(context.Background(), &model.Task{
+	if err := store.SaveTask(context.Background(), &model.Task{
 		ID:        "local1",
 		Title:     "Local Task",
 		Status:    model.StatusTodo,
 		Source:    "local",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-	})
+	}); err != nil {
+		t.Fatalf("failed to seed local task: %v", err)
+	}
 
 	engine := NewEngine(providers, store)
 
@@ -614,7 +618,9 @@ func TestGetStatus(t *testing.T) {
 		"mock": mockProvider,
 	}
 	store := NewMockStorage()
-	store.SetLastSyncTime(context.Background(), "mock", time.Now())
+	if err := store.SetLastSyncTime(context.Background(), "mock", time.Now()); err != nil {
+		t.Fatalf("failed to set last sync time: %v", err)
+	}
 
 	engine := NewEngine(providers, store)
 

@@ -328,7 +328,7 @@ func (mps *MultiProviderStorage) ListTasks(ctx context.Context, opts storage.Lis
 
 	// 汇总所有 Provider 的任务
 	var result []model.Task
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, p := range providers {
 		ps, err := mps.GetProviderStorage(p)
 		if err != nil {
@@ -388,7 +388,7 @@ func (mps *MultiProviderStorage) SaveTasks(ctx context.Context, tasks []*model.T
 func (mps *MultiProviderStorage) QueryTasks(ctx context.Context, query storage.Query) ([]model.Task, error) {
 	var result []model.Task
 
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	if len(query.Sources) > 0 {
 		providers = make([]string, len(query.Sources))
 		for i, s := range query.Sources {
@@ -445,7 +445,7 @@ func (mps *MultiProviderStorage) SaveTaskList(ctx context.Context, list *model.T
 
 // GetTaskList 获取任务列表
 func (mps *MultiProviderStorage) GetTaskList(ctx context.Context, id string) (*model.TaskList, error) {
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, p := range providers {
 		ps, err := mps.GetProviderStorage(p)
 		if err != nil {
@@ -462,7 +462,7 @@ func (mps *MultiProviderStorage) GetTaskList(ctx context.Context, id string) (*m
 // ListTaskLists 列出任务列表
 func (mps *MultiProviderStorage) ListTaskLists(ctx context.Context) ([]model.TaskList, error) {
 	var result []model.TaskList
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, p := range providers {
 		ps, err := mps.GetProviderStorage(p)
 		if err != nil {
@@ -479,7 +479,7 @@ func (mps *MultiProviderStorage) ListTaskLists(ctx context.Context) ([]model.Tas
 
 // DeleteTaskList 删除任务列表
 func (mps *MultiProviderStorage) DeleteTaskList(ctx context.Context, id string) error {
-	providers := []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	providers := []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 	for _, p := range providers {
 		ps, err := mps.GetProviderStorage(p)
 		if err != nil {
@@ -708,119 +708,11 @@ func (ps *ProviderStorage) QueryTasks(_ context.Context, query storage.Query) ([
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 
+	queryText := normalizedQueryText(query)
+
 	var result []model.Task
 	for _, task := range ps.tasks {
-		if len(query.TaskIDs) > 0 && !containsStringCI(query.TaskIDs, task.ID) {
-			continue
-		}
-
-		if len(query.Sources) > 0 {
-			sourceMatched := false
-			for _, s := range query.Sources {
-				if task.Source == s {
-					sourceMatched = true
-					break
-				}
-			}
-			if !sourceMatched {
-				continue
-			}
-		}
-
-		if len(query.ListIDs) > 0 && !containsStringCI(query.ListIDs, task.ListID) {
-			continue
-		}
-
-		if len(query.ListNames) > 0 {
-			matched := false
-			for _, name := range query.ListNames {
-				if filter.MatchListNameExactNormalized(name, task.ListName) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-		}
-
-		// 状态过滤
-		if len(query.Statuses) > 0 {
-			found := false
-			for _, s := range query.Statuses {
-				if task.Status == s {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// 象限过滤
-		if len(query.Quadrants) > 0 {
-			found := false
-			for _, q := range query.Quadrants {
-				if task.Quadrant == q {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// 优先级过滤
-		if len(query.Priorities) > 0 {
-			found := false
-			for _, p := range query.Priorities {
-				if task.Priority == p {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// 标签过滤
-		if len(query.Tags) > 0 {
-			tagsMatched := true
-			for _, tag := range query.Tags {
-				found := false
-				for _, taskTag := range task.Tags {
-					if strings.EqualFold(strings.TrimSpace(tag), strings.TrimSpace(taskTag)) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					tagsMatched = false
-					break
-				}
-			}
-			if !tagsMatched {
-				continue
-			}
-		}
-
-		// 截止日期过滤
-		if query.DueBefore != nil && task.DueDate != nil && task.DueDate.After(*query.DueBefore) {
-			continue
-		}
-		if query.DueAfter != nil && task.DueDate != nil && task.DueDate.Before(*query.DueAfter) {
-			continue
-		}
-
-		// 文本搜索（兼容 FullText）
-		queryText := query.QueryText
-		if queryText == "" {
-			queryText = query.FullText
-		}
-		if queryText != "" && !filter.MatchQueryText(task, queryText) {
+		if !taskMatchesQuery(task, query, queryText) {
 			continue
 		}
 
@@ -843,6 +735,130 @@ func (ps *ProviderStorage) QueryTasks(_ context.Context, query storage.Query) ([
 	}
 
 	return result, nil
+}
+
+func normalizedQueryText(query storage.Query) string {
+	if query.QueryText != "" {
+		return query.QueryText
+	}
+	return query.FullText
+}
+
+func taskMatchesQuery(task *model.Task, query storage.Query, queryText string) bool {
+	return matchTaskID(query.TaskIDs, task.ID) &&
+		matchSource(query.Sources, task.Source) &&
+		matchListID(query.ListIDs, task.ListID) &&
+		matchListName(query.ListNames, task.ListName) &&
+		matchStatus(query.Statuses, task.Status) &&
+		matchQuadrant(query.Quadrants, task.Quadrant) &&
+		matchPriority(query.Priorities, task.Priority) &&
+		matchTags(query.Tags, task.Tags) &&
+		matchDueDate(query.DueBefore, query.DueAfter, task.DueDate) &&
+		matchQueryText(queryText, task)
+}
+
+func matchTaskID(ids []string, taskID string) bool {
+	return len(ids) == 0 || containsStringCI(ids, taskID)
+}
+
+func matchSource(sources []model.TaskSource, source model.TaskSource) bool {
+	if len(sources) == 0 {
+		return true
+	}
+	for _, s := range sources {
+		if source == s {
+			return true
+		}
+	}
+	return false
+}
+
+func matchListID(ids []string, listID string) bool {
+	return len(ids) == 0 || containsStringCI(ids, listID)
+}
+
+func matchListName(listNames []string, listName string) bool {
+	if len(listNames) == 0 {
+		return true
+	}
+	for _, name := range listNames {
+		if filter.MatchListNameExactNormalized(name, listName) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchStatus(statuses []model.TaskStatus, status model.TaskStatus) bool {
+	if len(statuses) == 0 {
+		return true
+	}
+	for _, s := range statuses {
+		if status == s {
+			return true
+		}
+	}
+	return false
+}
+
+func matchQuadrant(quadrants []model.Quadrant, quadrant model.Quadrant) bool {
+	if len(quadrants) == 0 {
+		return true
+	}
+	for _, q := range quadrants {
+		if quadrant == q {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPriority(priorities []model.Priority, priority model.Priority) bool {
+	if len(priorities) == 0 {
+		return true
+	}
+	for _, p := range priorities {
+		if priority == p {
+			return true
+		}
+	}
+	return false
+}
+
+func matchTags(queryTags []string, taskTags []string) bool {
+	if len(queryTags) == 0 {
+		return true
+	}
+	for _, tag := range queryTags {
+		found := false
+		for _, taskTag := range taskTags {
+			if strings.EqualFold(strings.TrimSpace(tag), strings.TrimSpace(taskTag)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func matchDueDate(dueBefore, dueAfter, dueDate *time.Time) bool {
+	if dueBefore != nil && dueDate != nil && dueDate.After(*dueBefore) {
+		return false
+	}
+	if dueAfter != nil && dueDate != nil && dueDate.Before(*dueAfter) {
+		return false
+	}
+	return true
+}
+
+func matchQueryText(queryText string, task *model.Task) bool {
+	if queryText == "" {
+		return true
+	}
+	return filter.MatchQueryText(task, queryText)
 }
 
 func sortTasks(tasks []model.Task, orderBy string, orderDesc bool) {

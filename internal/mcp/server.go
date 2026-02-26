@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -172,7 +173,10 @@ func (s *Server) startSSE(ctx context.Context) error {
 
 	// 等待上下文取消
 	<-ctx.Done()
-	return httpServer.Shutdown(ctx)
+	// 使用独立超时上下文进行优雅关闭，避免直接传入已取消的 ctx 导致返回 context canceled
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return httpServer.Shutdown(shutdownCtx)
 }
 
 // startStreamableHTTP 启动 Streamable HTTP 传输
@@ -203,7 +207,10 @@ func (s *Server) startStreamableHTTP(ctx context.Context) error {
 
 	// 等待上下文取消
 	<-ctx.Done()
-	return httpServer.Shutdown(ctx)
+	// 使用独立超时上下文进行优雅关闭，避免直接传入已取消的 ctx 导致返回 context canceled
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return httpServer.Shutdown(shutdownCtx)
 }
 
 // registerTools 注册所有工具
@@ -503,7 +510,7 @@ func (s *Server) registerSyncTools() {
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"provider": {"type": "string", "description": "目标平台 (google, microsoft, feishu, ticktick, todoist)"},
+				"provider": {"type": "string", "description": "目标平台 (google, microsoft, feishu, ticktick, dida, todoist)"},
 				"delete": {"type": "boolean", "description": "是否删除远程存在但本地不存在的任务"},
 				"dry_run": {"type": "boolean", "description": "模拟执行，不实际修改"}
 			},
@@ -518,7 +525,7 @@ func (s *Server) registerSyncTools() {
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"provider": {"type": "string", "description": "来源平台 (google, microsoft, feishu, ticktick, todoist)"}
+				"provider": {"type": "string", "description": "来源平台 (google, microsoft, feishu, ticktick, dida, todoist)"}
 			},
 			"required": ["provider"]
 		}`),

@@ -1473,6 +1473,7 @@ func (s *Server) handleListProviders(ctx context.Context, req *mcp.CallToolReque
 	microsoftEnabled := false
 	feishuEnabled := false
 	ticktickEnabled := false
+	didaEnabled := false
 	todoistEnabled := false
 
 	if s.providerConfig != nil {
@@ -1480,6 +1481,7 @@ func (s *Server) handleListProviders(ctx context.Context, req *mcp.CallToolReque
 		microsoftEnabled = s.providerConfig.Microsoft.Enabled
 		feishuEnabled = s.providerConfig.Feishu.Enabled
 		ticktickEnabled = s.providerConfig.TickTick.Enabled
+		didaEnabled = s.providerConfig.Dida.Enabled
 		todoistEnabled = s.providerConfig.Todoist.Enabled
 	}
 
@@ -1516,8 +1518,17 @@ func (s *Server) handleListProviders(ctx context.Context, req *mcp.CallToolReque
 			ShortName:    "tick",
 			DisplayName:  "TickTick",
 			Description:  "TickTick 任务管理",
-			AuthType:     "Username/Password",
+			AuthType:     "API Token",
 			Enabled:      ticktickEnabled,
+			Capabilities: []string{"due_date", "task_lists", "subtasks", "priority", "tags", "reminder"},
+		},
+		{
+			Name:         "dida",
+			ShortName:    "tick_cn",
+			DisplayName:  "Dida365",
+			Description:  "滴答清单（国内）",
+			AuthType:     "API Token",
+			Enabled:      didaEnabled,
 			Capabilities: []string{"due_date", "task_lists", "subtasks", "priority", "tags", "reminder"},
 		},
 		{
@@ -1610,7 +1621,22 @@ func (s *Server) handleGetProviderInfo(ctx context.Context, req *mcp.CallToolReq
 			ShortName:   "tick",
 			DisplayName: "TickTick",
 			Description: "TickTick 任务管理",
-			AuthType:    "Username/Password",
+			AuthType:    "API Token",
+			Capabilities: []string{
+				"✅ 截止日期",
+				"✅ 任务列表",
+				"✅ 子任务",
+				"✅ 优先级",
+				"✅ 标签",
+				"✅ 提醒",
+			},
+		},
+		"dida": {
+			Name:        "dida",
+			ShortName:   "tick_cn",
+			DisplayName: "Dida365",
+			Description: "滴答清单（国内）",
+			AuthType:    "API Token",
 			Capabilities: []string{
 				"✅ 截止日期",
 				"✅ 任务列表",
@@ -1705,16 +1731,29 @@ func (s *Server) handleGetProviderConfigTemplate(ctx context.Context, req *mcp.C
 			},
 		},
 		"ticktick": map[string]interface{}{
-			"description": "TickTick 使用用户名密码认证",
-			"auth_type":   "Username/Password",
+			"description": "TickTick 使用 API Token 认证",
+			"auth_type":   "API Token",
 			"steps": []string{
-				"1. 准备你的 TickTick 账号邮箱和密码",
+				"1. 登录 TickTick Web 端",
+				"2. 打开开发者工具，复制请求中的 t token",
 			},
-			"required_fields": []string{"username", "password"},
+			"required_fields": []string{"api_token"},
 			"optional_fields": []string{},
 			"config_template": map[string]string{
-				"username": "你的 TickTick 邮箱",
-				"password": "你的 TickTick 密码",
+				"api_token": "你的 TickTick API Token（通常以 tp_ 开头）",
+			},
+		},
+		"dida": map[string]interface{}{
+			"description": "Dida365 使用 API Token 认证",
+			"auth_type":   "API Token",
+			"steps": []string{
+				"1. 登录 dida365.com",
+				"2. 打开开发者工具，复制请求中的 t token",
+			},
+			"required_fields": []string{"api_token"},
+			"optional_fields": []string{},
+			"config_template": map[string]string{
+				"api_token": "你的 Dida API Token（通常以 dp_ 开头）",
 			},
 		},
 		"feishu": map[string]interface{}{

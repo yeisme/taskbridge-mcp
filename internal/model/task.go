@@ -101,6 +101,8 @@ const (
 	SourceFeishu TaskSource = "feishu"
 	// SourceTickTick 滴答清单来源
 	SourceTickTick TaskSource = "ticktick"
+	// SourceDida 滴答清单国内版来源
+	SourceDida TaskSource = "dida"
 	// SourceTodoist Todoist 来源
 	SourceTodoist TaskSource = "todoist"
 	// SourceOmniFocus OmniFocus 来源
