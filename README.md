@@ -27,11 +27,14 @@ TaskBridge 是一个 MCP (Model Context Protocol) 工具，旨在连接各种 To
 | --------------- | --------- | ---------- |
 | Microsoft Todo  | ✅ 已完成 | 完整支持   |
 | Google Tasks    | ✅ 已完成 | 基础支持   |
-| 飞书任务        | 🚧 开发中 | 完整支持   |
-| TickTick        | 📋 计划中 | 原生四象限 |
-| Todoist         | 📋 计划中 | 完整支持   |
+| 飞书任务        | ✅ 已完成 | 完整支持   |
+| TickTick        | ✅ 已完成 | 原生四象限 |
+| 滴答清单        | ✅ 已完成 | 国内版     |
+| Todoist         | ✅ 已完成 | 完整支持   |
 | OmniFocus       | 📋 计划中 | macOS 专用 |
 | Apple Reminders | 📋 计划中 | macOS/iOS  |
+
+> 📖 **Provider 连接指南**: [docs/provider-setup-guide.md](docs/provider-setup-guide.md) - 详细介绍如何配置各个 Todo 平台
 
 ### 核心功能
 
@@ -153,11 +156,12 @@ taskbridge-mcp/
 - [x] Phase 2 - Provider 实现（核心）
   - [x] Microsoft Todo Provider
   - [x] Google Tasks Provider
-  - [ ] 飞书 Provider
+  - [x] 飞书 Provider
 
-- [ ] Phase 3 - Provider 实现（扩展）
-  - [ ] TickTick Provider
-  - [ ] Todoist Provider
+- [x] Phase 3 - Provider 实现（扩展）
+  - [x] TickTick Provider
+  - [x] 滴答清单 (Dida365) Provider
+  - [x] Todoist Provider
 
 - [x] Phase 4 - 同步引擎
   - [x] 同步引擎核心
