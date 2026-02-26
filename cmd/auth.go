@@ -11,8 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yeisme/taskbridge/internal/provider"
+	"github.com/yeisme/taskbridge/internal/provider/feishu"
 	"github.com/yeisme/taskbridge/internal/provider/google"
 	"github.com/yeisme/taskbridge/internal/provider/microsoft"
+	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/pkg/paths"
 	"github.com/yeisme/taskbridge/pkg/ui"
@@ -29,6 +31,7 @@ var authCmd = &cobra.Command{
   - microsoft: Microsoft Todo
   - feishu: 飞书任务
   - ticktick: TickTick
+  - dida: 滴答清单（国内）
   - todoist: Todoist
 
 子命令:
@@ -53,6 +56,11 @@ var authLoginCmd = &cobra.Command{
 
 支持的 Provider:
   - google: Google Tasks API
+  - microsoft: Microsoft Todo
+  - feishu: 飞书任务
+  - ticktick: TickTick（国际）
+  - dida: 滴答清单（国内）
+  - todoist: Todoist
 
 示例:
   taskbridge auth login google
@@ -134,7 +142,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) {
 	// 检查 Provider 是否有效
 	if !provider.IsValidProvider(providerName) {
 		fmt.Printf("❌ 不支持的 Provider: %s\n", args[0])
-		fmt.Println("支持的 Provider: google (g), microsoft (ms), feishu, ticktick (tick), todoist (todo)")
+		fmt.Println("支持的 Provider: google (g), microsoft (ms), feishu, ticktick (tick), dida (ticktick_cn), todoist (todo)")
 		os.Exit(1)
 	}
 
@@ -143,6 +151,12 @@ func runAuthLogin(cmd *cobra.Command, args []string) {
 		loginGoogle()
 	case "microsoft":
 		loginMicrosoft()
+	case "feishu":
+		loginFeishu()
+	case "ticktick":
+		loginTickTick()
+	case "dida":
+		loginDida()
 	case "todoist":
 		loginTodoist()
 	default:
@@ -264,7 +278,7 @@ func runAuthShow(cmd *cobra.Command, args []string) {
 	providerName := provider.ResolveProviderName(args[0])
 	if !provider.IsValidProvider(providerName) {
 		fmt.Printf("❌ 不支持的 Provider: %s\n", args[0])
-		fmt.Println("支持的 Provider: google (g), microsoft (ms), feishu, ticktick (tick), todoist (todo)")
+		fmt.Println("支持的 Provider: google (g), microsoft (ms), feishu, ticktick (tick), dida (ticktick_cn), todoist (todo)")
 		os.Exit(1)
 	}
 
@@ -317,6 +331,12 @@ func runAuthRefresh(cmd *cobra.Command, args []string) {
 		refreshGoogleToken()
 	case "microsoft":
 		refreshMicrosoftToken()
+	case "feishu":
+		refreshFeishuToken()
+	case "ticktick":
+		refreshTickTickToken()
+	case "dida":
+		refreshDidaToken()
 	case "todoist":
 		refreshTodoistToken()
 	default:
@@ -440,6 +460,194 @@ func refreshMicrosoftToken() {
 	fmt.Printf("🔑 新过期时间: %s\n", token.Expiry.Format("2006-01-02 15:04:05"))
 }
 
+// loginFeishu 登录飞书
+func loginFeishu() {
+	fmt.Println("🔐 开始飞书 Todo OAuth2 认证...")
+
+	if err := paths.EnsureCredentialsDir(); err != nil {
+		fmt.Printf("❌ 创建凭证目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	credentialsPath := paths.GetCredentialsPath("feishu")
+	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+		fmt.Printf("❌ 凭证文件不存在: %s\n", credentialsPath)
+		fmt.Println("\n请按以下步骤操作:")
+		fmt.Println("1. 访问飞书开放平台: https://open.feishu.cn/")
+		fmt.Println("2. 创建自建应用并开启 Todo 相关权限")
+		fmt.Println("3. 配置重定向 URL（端口需与本地回调监听一致，例如 http://127.0.0.1:3456/callback）")
+		fmt.Printf("4. 创建凭证文件并保存到: %s\n", credentialsPath)
+		fmt.Println("\n凭证文件格式:")
+		fmt.Println(`{
+  "app_id": "cli_xxx",
+  "app_secret": "xxxx",
+  "redirect_url": "http://127.0.0.1:3456/callback",
+  "scopes": ["task:tasklist:read","task:tasklist:write","task:task:read","task:task:write"]
+}`)
+		os.Exit(1)
+	}
+
+	oauthClient, err := feishu.LoadCredentials(credentialsPath)
+	if err != nil {
+		fmt.Printf("❌ 加载凭证失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	tokenPath := paths.GetTokenPath("feishu")
+	oauthClient.SetTokenFile(tokenPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// 端口由凭证中的 redirect_url 决定（不强制使用 8080）
+	token, err := oauthClient.StartAuthServer(ctx, 0)
+	if err != nil {
+		fmt.Printf("❌ 认证失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n✅ 飞书 Todo 认证成功!")
+	fmt.Printf("📁 Token 已保存到: %s\n", tokenPath)
+	fmt.Printf("🔑 Token 类型: %s\n", token.TokenType)
+}
+
+// refreshFeishuToken 刷新飞书 token
+func refreshFeishuToken() {
+	credentialsPath := paths.GetCredentialsPath("feishu")
+	tokenPath := paths.GetTokenPath("feishu")
+
+	oauthClient, err := feishu.LoadCredentials(credentialsPath)
+	if err != nil {
+		fmt.Printf("❌ 加载飞书 OAuth2 客户端失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	oauthClient.SetTokenFile(tokenPath)
+	if err := oauthClient.LoadToken(); err != nil {
+		fmt.Printf("❌ 加载 token 失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	token, err := oauthClient.RefreshToken(context.Background())
+	if err != nil {
+		fmt.Printf("❌ 刷新 token 失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := oauthClient.SaveToken(); err != nil {
+		fmt.Printf("❌ 保存 token 失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ 飞书 token 已刷新")
+	fmt.Printf("🔑 新过期时间(秒): %d\n", token.ExpiresIn)
+}
+
+// loginTickTick 登录 TickTick（API Token）
+func loginTickTick() {
+	loginTickStyleProvider("ticktick")
+}
+
+func loginDida() {
+	loginTickStyleProvider("dida")
+}
+
+func loginTickStyleProvider(providerName string) {
+	displayName := "TickTick"
+	tokenHint := "tp_"
+	if providerName == "dida" {
+		displayName = "Dida365"
+		tokenHint = "dp_"
+	}
+
+	fmt.Printf("🔐 开始 %s API Token 认证...\n", displayName)
+
+	if err := paths.EnsureCredentialsDir(); err != nil {
+		fmt.Printf("❌ 创建凭证目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	tokenPath := paths.GetTokenPath(providerName)
+	fmt.Printf("\n请按以下步骤获取 %s API Token:\n", displayName)
+	if providerName == "dida" {
+		fmt.Println("1. 打开 dida365.com 并登录")
+	} else {
+		fmt.Println("1. 打开 ticktick.com 并登录")
+	}
+	fmt.Println("2. 打开浏览器开发者工具，查看请求中的 `t=` token")
+	fmt.Printf("3. 复制 token（通常以 `%s` 开头）\n", tokenHint)
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("请输入 %s API Token: ", displayName)
+	apiToken, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("❌ 读取 API Token 失败: %v\n", err)
+		os.Exit(1)
+	}
+	apiToken = strings.TrimSpace(apiToken)
+	if apiToken == "" {
+		fmt.Println("❌ API Token 不能为空")
+		os.Exit(1)
+	}
+
+	p, err := ticktick.NewProvider(ticktick.Config{
+		ProviderName: providerName,
+		Token:        apiToken,
+		TokenFile:    tokenPath,
+	})
+	if err != nil {
+		fmt.Printf("❌ 初始化 %s Provider 失败: %v\n", displayName, err)
+		os.Exit(1)
+	}
+	if err := p.Authenticate(context.Background(), map[string]interface{}{
+		"token":    apiToken,
+		"provider": providerName,
+	}); err != nil {
+		fmt.Printf("❌ %s 认证失败: %v\n", displayName, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n✅ %s 认证成功!\n", displayName)
+	fmt.Printf("📁 Token 已保存到: %s\n", tokenPath)
+}
+
+// refreshTickTickToken 刷新 TickTick token（静态 token）
+func refreshTickTickToken() {
+	refreshTickStyleProvider("ticktick")
+}
+
+func refreshDidaToken() {
+	refreshTickStyleProvider("dida")
+}
+
+func refreshTickStyleProvider(providerName string) {
+	displayName := "TickTick"
+	if providerName == "dida" {
+		displayName = "Dida365"
+	}
+	tokenPath := paths.GetTokenPath(providerName)
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		fmt.Printf("❌ %s 凭证不存在，请先执行: taskbridge auth login %s\n", displayName, providerName)
+		os.Exit(1)
+	}
+
+	p, err := ticktick.NewProvider(ticktick.Config{
+		ProviderName: providerName,
+		TokenFile:    tokenPath,
+	})
+	if err != nil {
+		fmt.Printf("❌ 初始化 %s Provider 失败: %v\n", displayName, err)
+		os.Exit(1)
+	}
+	if err := p.RefreshToken(context.Background()); err != nil {
+		fmt.Printf("❌ 刷新 %s token 失败: %v\n", displayName, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ %s token 校验通过（静态 token 无需刷新）\n", displayName)
+}
+
 // loginTodoist 登录 Todoist（API Token）
 func loginTodoist() {
 	fmt.Println("🔐 开始 Todoist API Token 认证...")
@@ -510,7 +718,7 @@ type providerMeta struct {
 }
 
 func getAuthProviderOrder() []string {
-	return []string{"google", "microsoft", "feishu", "ticktick", "todoist"}
+	return []string{"google", "microsoft", "feishu", "ticktick", "dida", "todoist"}
 }
 
 func getAuthProviderMeta(name string) providerMeta {
@@ -543,6 +751,8 @@ func isProviderEnabled(providerName string) bool {
 		return cfg.Providers.Feishu.Enabled
 	case "ticktick":
 		return cfg.Providers.TickTick.Enabled
+	case "dida":
+		return cfg.Providers.Dida.Enabled
 	case "todoist":
 		return cfg.Providers.Todoist.Enabled
 	default:
