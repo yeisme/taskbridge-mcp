@@ -85,14 +85,15 @@ go mod tidy
 go build -o taskbridge
 ```
 
-#### 配置
+#### 配置（环境变量 + 命令行参数）
 
 ```bash
-# 复制配置文件
-cp configs/config.yaml ~/.taskbridge/config.yaml
+# 统一工作目录（配置/凭证/日志/缓存）
+export TASKBRIDGE_HOME=~/.taskbridge
 
-# 编辑配置
-vim ~/.taskbridge/config.yaml
+# 可选：设置默认存储路径和启用的 Provider
+export TASKBRIDGE_STORAGE_PATH=~/.taskbridge/data
+export TASKBRIDGE_PROVIDERS=microsoft,todoist
 ```
 
 #### 使用
@@ -119,8 +120,8 @@ vim ~/.taskbridge/config.yaml
 # 分析任务
 ./taskbridge analyze
 
-# 启动后台服务
-./taskbridge serve
+# 启动后台服务（也可直接用参数覆盖）
+./taskbridge --storage-path ~/.taskbridge/data --providers microsoft,todoist serve
 ```
 
 ### 项目结构

@@ -478,8 +478,6 @@ type SyncChanges struct {
 | OmniFocus       | ✅     | ✅   | ✅     | ✅       | ✅   | ✅   | ❌       | macOS 专用 |
 | Apple Reminders | ✅     | ✅   | ✅     | ✅       | ✅   | ❌   | ❌       | macOS/iOS  |
 
-
-
 ```go
 
     databaseID string

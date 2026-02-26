@@ -8,8 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
-
-	"github.com/yeisme/taskbridge/pkg/config"
 )
 
 var (
@@ -21,13 +19,13 @@ var (
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "配置管理",
-	Long: `管理 TaskBridge 配置。
+	Long: `管理 TaskBridge 运行配置（已迁移到环境变量和命令行参数）。
 
 子命令:
   show     显示当前配置
-  set      设置配置项
+  set      设置配置项（已弃用）
   get      获取配置项
-  init     初始化配置文件
+  init     初始化配置文件（已弃用）
   validate 验证配置
 
 示例:
@@ -120,31 +118,14 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 		fmt.Println(string(data))
 	}
 
-	// 显示配置文件路径
-	configPath := config.GetConfigPath()
-	fmt.Printf("\n配置文件路径: %s\n", configPath)
+	fmt.Println("\n配置来源: 默认值 + 环境变量 + 命令行参数（config.yaml 已弃用）")
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) {
-	key := args[0]
-	value := args[1]
-
-	// 解析 key 并设置值
-	// 这里简化实现，实际需要更复杂的配置解析
-	fmt.Printf("设置 %s = %s\n", key, value)
-
-	// 保存配置
-	configPath := cfgFile
-	if configPath == "" {
-		configPath = config.GetConfigPath()
-	}
-
-	if err := config.Save(cfg, configPath); err != nil {
-		fmt.Printf("❌ 保存配置失败: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("✅ 配置已保存到 %s\n", configPath)
+	_ = args
+	fmt.Println("❌ `taskbridge config set` 已弃用。请改用环境变量或命令行参数。")
+	fmt.Println("   示例: TASKBRIDGE_STORAGE_PATH=./data taskbridge list")
+	os.Exit(1)
 }
 
 func runConfigGet(cmd *cobra.Command, args []string) {
@@ -265,22 +246,11 @@ func runConfigGet(cmd *cobra.Command, args []string) {
 }
 
 func runConfigInit(cmd *cobra.Command, args []string) {
-	outputPath := cfgFile
-	if outputPath == "" {
-		outputPath = config.GetDefaultConfigPath()
-	}
-
-	// 创建默认配置
-	defaultCfg := config.DefaultConfig()
-
-	// 保存配置
-	if err := config.Save(defaultCfg, outputPath); err != nil {
-		fmt.Printf("❌ 创建配置文件失败: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("✅ 配置文件已创建: %s\n", outputPath)
-	fmt.Println("\n请编辑配置文件以启用和配置 Provider")
+	_ = cmd
+	_ = args
+	fmt.Println("❌ `taskbridge config init` 已弃用。请改用环境变量或命令行参数。")
+	fmt.Println("   示例: taskbridge --providers microsoft,todoist mcp start")
+	os.Exit(1)
 }
 
 func runConfigValidate(cmd *cobra.Command, args []string) {

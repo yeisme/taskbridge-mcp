@@ -4,6 +4,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -25,6 +26,9 @@ func GetHomeDir() string {
 
 // GetAppDir 获取应用配置目录 (~/.taskbridge)
 func GetAppDir() string {
+	if custom := strings.TrimSpace(os.Getenv("TASKBRIDGE_HOME")); custom != "" {
+		return custom
+	}
 	return filepath.Join(GetHomeDir(), "."+AppName)
 }
 

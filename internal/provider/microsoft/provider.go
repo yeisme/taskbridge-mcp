@@ -13,6 +13,7 @@ import (
 
 	"github.com/yeisme/taskbridge/internal/model"
 	"github.com/yeisme/taskbridge/internal/provider"
+	"github.com/yeisme/taskbridge/pkg/paths"
 )
 
 // Provider Microsoft To Do Provider
@@ -698,13 +699,7 @@ func (p *Provider) SetEnvAuth() error {
 // 凭证文件路径: ~/.taskbridge/credentials/microsoft_credentials.json
 // Token 文件路径: ~/.taskbridge/credentials/microsoft_token.json
 func NewProviderFromHome() (*Provider, error) {
-	// 获取凭证目录
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	credentialsDir := filepath.Join(home, ".taskbridge", "credentials")
+	credentialsDir := paths.GetCredentialsDir()
 
 	// 确保凭证目录存在
 	if err := os.MkdirAll(credentialsDir, 0700); err != nil {
@@ -748,7 +743,6 @@ func NewProviderFromHome() (*Provider, error) {
 		log.Debug().
 			Str("token_type", validToken.TokenType).
 			Bool("valid", validToken.Valid()).
-			Str("access_token_preview", validToken.AccessToken[:50]+"...").
 			Msg("Microsoft token loaded successfully")
 
 		// 直接设置 token 到 client
