@@ -17,6 +17,9 @@ import (
 	"sync"
 	"time"
 
+	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	larkauthenv1 "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
 )
@@ -117,20 +120,54 @@ func (c *OAuth2Client) SetTokenFile(path string) {
 
 // ExchangeCode 交换授权码获取 token
 func (c *OAuth2Client) ExchangeCode(ctx context.Context, code string) (*TokenResponse, error) {
-	// 构建请求体
-	reqBody := map[string]string{
-		"grant_type": "authorization_code",
-		"code":       code,
-	}
+	client := lark.NewClient(
+		c.config.AppID,
+		c.config.AppSecret,
+		lark.WithLogLevel(larkcore.LogLevelError),
+	)
 
-	// 发送请求
-	resp, err := c.doTokenRequest(ctx, DefaultTokenURL, reqBody)
+	resp, err := client.Authen.V1.OidcAccessToken.Create(
+		ctx,
+		larkauthenv1.NewCreateOidcAccessTokenReqBuilder().
+			Body(
+				larkauthenv1.NewCreateOidcAccessTokenReqBodyBuilder().
+					GrantType("authorization_code").
+					Code(code).
+					Build(),
+			).
+			Build(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange code: %w", err)
 	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("failed to exchange code: %d - %s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.AccessToken == nil {
+		return nil, fmt.Errorf("failed to exchange code: empty token data")
+	}
+
+	token := &TokenResponse{
+		AccessToken: *resp.Data.AccessToken,
+	}
+	if resp.Data.TokenType != nil {
+		token.TokenType = *resp.Data.TokenType
+	}
+	if resp.Data.ExpiresIn != nil {
+		token.ExpiresIn = *resp.Data.ExpiresIn
+	}
+	if resp.Data.RefreshToken != nil {
+		token.RefreshToken = *resp.Data.RefreshToken
+	}
+	if resp.Data.Scope != nil {
+		token.Scope = *resp.Data.Scope
+	}
+	if resp.Data.RefreshExpiresIn != nil {
+		token.RefreshExpiresIn = *resp.Data.RefreshExpiresIn
+	}
 
 	c.mu.Lock()
-	c.token = resp
+	c.token = token
 	c.mu.Unlock()
 
 	// 保存 token
@@ -138,7 +175,7 @@ func (c *OAuth2Client) ExchangeCode(ctx context.Context, code string) (*TokenRes
 		log.Warn().Err(err).Msg("Failed to save token")
 	}
 
-	return resp, nil
+	return token, nil
 }
 
 // StartAuthServer 启动本地认证服务器
@@ -160,7 +197,11 @@ func (c *OAuth2Client) StartAuthServer(ctx context.Context, port int) (*TokenRes
 	if err != nil {
 		return nil, fmt.Errorf("failed to start listener: %w", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if err := listener.Close(); err != nil {
+			log.Warn().Err(err).Msg("Failed to close OAuth callback listener")
+		}
+	}()
 
 	// 生成授权 URL
 	authURL := c.AuthURL()
@@ -315,16 +356,50 @@ func (c *OAuth2Client) RefreshToken(ctx context.Context) (*TokenResponse, error)
 		return nil, fmt.Errorf("no refresh token available")
 	}
 
-	// 构建请求体
-	reqBody := map[string]string{
-		"grant_type":    "refresh_token",
-		"refresh_token": token.RefreshToken,
-	}
+	client := lark.NewClient(
+		c.config.AppID,
+		c.config.AppSecret,
+		lark.WithLogLevel(larkcore.LogLevelError),
+	)
 
-	// 发送请求
-	newToken, err := c.doTokenRequest(ctx, DefaultRefreshTokenURL, reqBody)
+	resp, err := client.Authen.V1.OidcRefreshAccessToken.Create(
+		ctx,
+		larkauthenv1.NewCreateOidcRefreshAccessTokenReqBuilder().
+			Body(
+				larkauthenv1.NewCreateOidcRefreshAccessTokenReqBodyBuilder().
+					GrantType("refresh_token").
+					RefreshToken(token.RefreshToken).
+					Build(),
+			).
+			Build(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to refresh token: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("failed to refresh token: %d - %s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.AccessToken == nil {
+		return nil, fmt.Errorf("failed to refresh token: empty token data")
+	}
+
+	newToken := &TokenResponse{
+		AccessToken: *resp.Data.AccessToken,
+	}
+	if resp.Data.TokenType != nil {
+		newToken.TokenType = *resp.Data.TokenType
+	}
+	if resp.Data.ExpiresIn != nil {
+		newToken.ExpiresIn = *resp.Data.ExpiresIn
+	}
+	if resp.Data.RefreshToken != nil {
+		newToken.RefreshToken = *resp.Data.RefreshToken
+	}
+	if resp.Data.Scope != nil {
+		newToken.Scope = *resp.Data.Scope
+	}
+	if resp.Data.RefreshExpiresIn != nil {
+		newToken.RefreshExpiresIn = *resp.Data.RefreshExpiresIn
 	}
 
 	// 如果新 token 没有返回 refresh_token，保留原来的
@@ -365,7 +440,11 @@ func (c *OAuth2Client) doTokenRequest(ctx context.Context, tokenURL string, para
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn().Err(err).Msg("Failed to close token response body")
+		}
+	}()
 
 	// 读取响应
 	body, err := io.ReadAll(resp.Body)
@@ -548,7 +627,11 @@ func (c *OAuth2Client) GetUserInfo(ctx context.Context) (*UserInfoResponse, erro
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Warn().Err(err).Msg("Failed to close user info response body")
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -4,7 +4,6 @@ package microsoft
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -757,16 +756,4 @@ func NewProviderFromHome() (*Provider, error) {
 	}
 
 	return p, nil
-}
-
-// authTransport 自定义 Transport，手动添加 Authorization header
-type authTransport struct {
-	base      http.RoundTripper
-	token     string
-	tokenType string
-}
-
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", t.tokenType+" "+t.token)
-	return t.base.RoundTrip(req)
 }

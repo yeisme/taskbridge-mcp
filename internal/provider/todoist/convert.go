@@ -1,7 +1,6 @@
 package todoist
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -183,22 +182,4 @@ func parseIntID(id string) (int64, bool) {
 
 func containsIgnoreCase(s, sub string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
-}
-
-func formatDuration(d time.Duration) string {
-	if d < 0 {
-		return "已过期"
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%d秒", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%d分钟", int(d.Minutes()))
-	}
-	hours := int(d.Hours())
-	minutes := int(d.Minutes()) % 60
-	if minutes == 0 {
-		return fmt.Sprintf("%d小时", hours)
-	}
-	return fmt.Sprintf("%d小时%d分钟", hours, minutes)
 }

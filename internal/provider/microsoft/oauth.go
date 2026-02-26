@@ -158,7 +158,9 @@ func (c *OAuth2Client) StartAuthServer(ctx context.Context, port int) (*oauth2.T
 	if err != nil {
 		return nil, fmt.Errorf("failed to start listener: %w", err)
 	}
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	// 生成授权 URL
 	authURL := c.AuthURL()

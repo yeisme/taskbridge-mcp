@@ -4,6 +4,7 @@ package feishu
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/yeisme/taskbridge/internal/model"
 	"github.com/yeisme/taskbridge/internal/provider"
+	"github.com/yeisme/taskbridge/pkg/paths"
 )
 
 // Provider 飞书任务 Provider
@@ -75,6 +77,7 @@ func NewProvider(cfg Config) (*Provider, error) {
 
 	// 初始化客户端
 	p.client = NewClient("")
+	p.client.SetCredentials(cfg.AppID, cfg.AppSecret)
 
 	return p, nil
 }
@@ -96,26 +99,23 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 
 	// 如果已有有效 token，直接返回
 	if p.oauth != nil {
-		_, err := p.oauth.ValidToken(ctx)
+		token, err := p.oauth.ValidToken(ctx)
 		if err == nil {
-			// 创建客户端
-			httpClient, err := p.oauth.HTTPClient(ctx)
-			if err != nil {
-				return err
+			p.client.SetUserAccessToken(token.AccessToken)
+			if p.oauth.config != nil {
+				p.client.SetCredentials(p.oauth.config.AppID, p.oauth.config.AppSecret)
 			}
-			p.client.SetHTTPClient(httpClient)
 			return nil
 		}
 
 		// 尝试从文件加载 token
 		if err := p.oauth.LoadToken(); err == nil {
-			_, err := p.oauth.ValidToken(ctx)
+			token, err := p.oauth.ValidToken(ctx)
 			if err == nil {
-				httpClient, err := p.oauth.HTTPClient(ctx)
-				if err != nil {
-					return err
+				p.client.SetUserAccessToken(token.AccessToken)
+				if p.oauth.config != nil {
+					p.client.SetCredentials(p.oauth.config.AppID, p.oauth.config.AppSecret)
 				}
-				p.client.SetHTTPClient(httpClient)
 				return nil
 			}
 		}
@@ -133,6 +133,7 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 			RedirectURL: redirectURL,
 			TokenFile:   tokenFile,
 		})
+		p.client.SetCredentials(appID, appSecret)
 	}
 
 	// 启动交互式认证流程
@@ -142,12 +143,10 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 			return fmt.Errorf("authentication failed: %w", err)
 		}
 
-		// 设置 HTTP 客户端
-		httpClient, err := p.oauth.HTTPClient(ctx)
-		if err != nil {
-			return err
+		p.client.SetUserAccessToken(token.AccessToken)
+		if p.oauth.config != nil {
+			p.client.SetCredentials(p.oauth.config.AppID, p.oauth.config.AppSecret)
 		}
-		p.client.SetHTTPClient(httpClient)
 
 		log.Info().Str("token_type", token.TokenType).Msg("Feishu authentication successful")
 		return nil
@@ -177,17 +176,15 @@ func (p *Provider) RefreshToken(ctx context.Context) error {
 		return fmt.Errorf("no OAuth client available")
 	}
 
-	_, err := p.oauth.RefreshToken(ctx)
+	token, err := p.oauth.RefreshToken(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to refresh token: %w", err)
 	}
 
-	// 更新 HTTP 客户端
-	httpClient, err := p.oauth.HTTPClient(ctx)
-	if err != nil {
-		return err
+	p.client.SetUserAccessToken(token.AccessToken)
+	if p.oauth.config != nil {
+		p.client.SetCredentials(p.oauth.config.AppID, p.oauth.config.AppSecret)
 	}
-	p.client.SetHTTPClient(httpClient)
 
 	return nil
 }
@@ -444,6 +441,30 @@ func (p *Provider) Logout() error {
 		return nil
 	}
 	return p.oauth.RevokeToken()
+}
+
+// NewProviderFromHome 从 HOME 目录加载凭证创建 Provider
+func NewProviderFromHome() (*Provider, error) {
+	credentialsPath := paths.GetCredentialsPath("feishu")
+	tokenPath := paths.GetTokenPath("feishu")
+
+	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("credentials file not found at %s", credentialsPath)
+	}
+
+	p, err := NewProvider(Config{
+		CredentialsFile: credentialsPath,
+		TokenFile:       tokenPath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create provider: %w", err)
+	}
+
+	if err := p.Authenticate(context.Background(), nil); err != nil {
+		return nil, fmt.Errorf("feishu provider authentication failed: %w", err)
+	}
+
+	return p, nil
 }
 
 // ================ 初始化时注册 Provider ================

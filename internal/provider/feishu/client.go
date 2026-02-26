@@ -2,35 +2,38 @@
 package feishu
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
+	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	larktaskv2 "github.com/larksuite/oapi-sdk-go/v3/service/task/v2"
 	"github.com/rs/zerolog/log"
 )
 
 const (
 	// APIVersion 飞书 API 版本
-	APIVersion = "v1"
-	// TaskAPIPath 任务 API 路径
-	TaskAPIPath = "/task/v1"
+	APIVersion = "v2"
 	// DefaultPageSize 默认分页大小
 	DefaultPageSize = 50
 	// MaxPageSize 最大分页大小
 	MaxPageSize = 100
 )
 
-// Client 飞书 API 客户端
+// Client 飞书 API 客户端（基于官方 Go SDK）
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	appID      string
-	appSecret  string
+	mu              sync.RWMutex
+	sdk             *lark.Client
+	baseURL         string
+	appID           string
+	appSecret       string
+	userAccessToken string
+	httpClient      *http.Client
 }
 
 // NewClient 创建 API 客户端
@@ -38,381 +41,629 @@ func NewClient(baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = DefaultAPIBaseURL
 	}
-	return &Client{
+
+	c := &Client{
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		baseURL: baseURL,
 	}
+	c.rebuildSDKLocked()
+	return c
 }
 
-// SetHTTPClient 设置 HTTP 客户端（用于 OAuth2）
+// SetHTTPClient 设置 HTTP 客户端（兼容旧接口）
 func (c *Client) SetHTTPClient(httpClient *http.Client) {
+	if httpClient == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.httpClient = httpClient
+	c.rebuildSDKLocked()
 }
 
 // SetCredentials 设置应用凭据
 func (c *Client) SetCredentials(appID, appSecret string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.appID = appID
 	c.appSecret = appSecret
+	c.rebuildSDKLocked()
+}
+
+// SetUserAccessToken 设置用户访问令牌
+func (c *Client) SetUserAccessToken(accessToken string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.userAccessToken = strings.TrimSpace(accessToken)
+}
+
+func (c *Client) rebuildSDKLocked() {
+	appID := c.appID
+	appSecret := c.appSecret
+	if appID == "" {
+		appID = "placeholder_app_id"
+	}
+	if appSecret == "" {
+		appSecret = "placeholder_app_secret"
+	}
+
+	opts := []lark.ClientOptionFunc{
+		lark.WithLogLevel(larkcore.LogLevelError),
+		lark.WithHttpClient(c.httpClient),
+	}
+	if c.baseURL != "" && c.baseURL != DefaultAPIBaseURL {
+		opts = append(opts, lark.WithOpenBaseUrl(c.baseURL))
+	}
+
+	c.sdk = lark.NewClient(appID, appSecret, opts...)
+}
+
+func (c *Client) requestOptions() ([]larkcore.RequestOptionFunc, error) {
+	c.mu.RLock()
+	token := c.userAccessToken
+	c.mu.RUnlock()
+
+	if token == "" {
+		return nil, fmt.Errorf("feishu user access token is empty")
+	}
+
+	return []larkcore.RequestOptionFunc{larkcore.WithUserAccessToken(token)}, nil
+}
+
+func parseMillis(value *string) int64 {
+	if value == nil || *value == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(*value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func sdkTaskToLocal(task *larktaskv2.Task) Task {
+	if task == nil {
+		return Task{}
+	}
+
+	local := Task{}
+	if task.Guid != nil {
+		local.TaskID = *task.Guid
+	}
+	if task.Summary != nil {
+		local.Title = *task.Summary
+	}
+	if task.Description != nil {
+		local.Description = *task.Description
+	}
+	if task.CreatedAt != nil {
+		local.CreatedTime = parseMillis(task.CreatedAt)
+	}
+	if task.UpdatedAt != nil {
+		local.UpdatedTime = parseMillis(task.UpdatedAt)
+	}
+	if task.CompletedAt != nil {
+		local.CompletedTime = parseMillis(task.CompletedAt)
+	}
+	if task.Due != nil {
+		local.DueTime = parseMillis(task.Due.Timestamp)
+	}
+	if task.Start != nil {
+		local.StartTime = parseMillis(task.Start.Timestamp)
+	}
+
+	if task.Status != nil {
+		switch *task.Status {
+		case "done":
+			local.Status = StatusDone
+		default:
+			local.Status = StatusTodo
+		}
+	}
+
+	if len(task.Tasklists) > 0 {
+		local.TasklistIDs = make([]string, 0, len(task.Tasklists))
+		for _, info := range task.Tasklists {
+			if info != nil && info.TasklistGuid != nil {
+				local.TasklistIDs = append(local.TasklistIDs, *info.TasklistGuid)
+			}
+		}
+	}
+
+	if len(task.Members) > 0 {
+		local.CollaboratorIDs = make([]string, 0, len(task.Members))
+		for _, m := range task.Members {
+			if m != nil && m.Id != nil {
+				local.CollaboratorIDs = append(local.CollaboratorIDs, *m.Id)
+			}
+		}
+	}
+
+	return local
+}
+
+func sdkTasklistToLocal(list *larktaskv2.Tasklist) TaskList {
+	local := TaskList{}
+	if list == nil {
+		return local
+	}
+	if list.Guid != nil {
+		local.TaskListID = *list.Guid
+	}
+	if list.Name != nil {
+		local.Name = *list.Name
+	}
+	if list.CreatedAt != nil {
+		local.CreatedTime = parseMillis(list.CreatedAt)
+	}
+	if list.UpdatedAt != nil {
+		local.CompletedTime = parseMillis(list.UpdatedAt)
+	}
+	return local
+}
+
+func localTaskToInputTask(task *Task, listIDs []string) *larktaskv2.InputTask {
+	builder := larktaskv2.NewInputTaskBuilder().
+		Summary(task.Title).
+		Description(task.Description)
+
+	if task.DueTime > 0 {
+		due := larktaskv2.NewDueBuilder().Timestamp(strconv.FormatInt(task.DueTime, 10)).Build()
+		builder = builder.Due(due)
+	}
+
+	if task.StartTime > 0 {
+		start := larktaskv2.NewStartBuilder().Timestamp(strconv.FormatInt(task.StartTime, 10)).Build()
+		builder = builder.Start(start)
+	}
+
+	if len(listIDs) > 0 {
+		tasklists := make([]*larktaskv2.TaskInTasklistInfo, 0, len(listIDs))
+		for _, id := range listIDs {
+			tasklists = append(tasklists, larktaskv2.NewTaskInTasklistInfoBuilder().TasklistGuid(id).Build())
+		}
+		builder = builder.Tasklists(tasklists)
+	}
+
+	// v2 通过 completed_at 表达完成状态
+	if task.Status == StatusDone {
+		ts := task.CompletedTime
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		}
+		builder = builder.CompletedAt(strconv.FormatInt(ts, 10))
+	}
+
+	return builder.Build()
+}
+
+func localUpdateToInputTaskAndFields(req *UpdateTaskRequest) (*larktaskv2.InputTask, []string) {
+	input := larktaskv2.NewInputTaskBuilder()
+	fields := make([]string, 0, 6)
+
+	if req.Title != "" {
+		input = input.Summary(req.Title)
+		fields = append(fields, "summary")
+	}
+	if req.Description != "" {
+		input = input.Description(req.Description)
+		fields = append(fields, "description")
+	}
+	if req.DueTime > 0 {
+		due := larktaskv2.NewDueBuilder().Timestamp(strconv.FormatInt(req.DueTime, 10)).Build()
+		input = input.Due(due)
+		fields = append(fields, "due")
+	}
+	if req.StartTime > 0 {
+		start := larktaskv2.NewStartBuilder().Timestamp(strconv.FormatInt(req.StartTime, 10)).Build()
+		input = input.Start(start)
+		fields = append(fields, "start")
+	}
+
+	// 同步完成状态到 completed_at
+	if req.Status == StatusDone {
+		ts := req.CompletedTime
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		}
+		input = input.CompletedAt(strconv.FormatInt(ts, 10))
+		fields = append(fields, "completed_at")
+	} else if req.Status == StatusTodo {
+		input = input.CompletedAt("0")
+		fields = append(fields, "completed_at")
+	}
+
+	if len(fields) == 0 {
+		fields = append(fields, "summary")
+		input = input.Summary(req.Title)
+	}
+
+	return input.Build(), fields
 }
 
 // ================ 任务列表操作 ================
 
 // ListTaskLists 获取所有任务列表
-// https://open.feishu.cn/document/server-docs/task/v1/tasklist/query
 func (c *Client) ListTaskLists(ctx context.Context, pageToken string, pageSize int) (*TaskListResponse, error) {
-	path := fmt.Sprintf("%s/tasklists", TaskAPIPath)
-
-	// 构建查询参数
-	params := url.Values{}
-	if pageSize > 0 {
-		if pageSize > MaxPageSize {
-			pageSize = MaxPageSize
-		}
-		params.Set("page_size", fmt.Sprintf("%d", pageSize))
-	}
-	if pageToken != "" {
-		params.Set("page_token", pageToken)
+	if pageSize <= 0 || pageSize > MaxPageSize {
+		pageSize = DefaultPageSize
 	}
 
-	if len(params) > 0 {
-		path = path + "?" + params.Encode()
-	}
-
-	var resp TaskListResponse
-	if err := c.get(ctx, path, &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	reqBuilder := larktaskv2.NewListTasklistReqBuilder().
+		PageSize(pageSize).
+		UserIdType(larktaskv2.UserIdTypeOpenId)
+	if pageToken != "" {
+		reqBuilder = reqBuilder.PageToken(pageToken)
 	}
 
-	return &resp, nil
+	resp, err := c.sdk.Task.V2.Tasklist.List(ctx, reqBuilder.Build(), opts...)
+	if err != nil {
+		return nil, fmt.Errorf("list tasklists failed: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("list tasklists failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	out := &TaskListResponse{Code: 0, Msg: "ok"}
+	if resp.Data == nil {
+		return out, nil
+	}
+
+	for _, item := range resp.Data.Items {
+		local := sdkTasklistToLocal(item)
+		out.Data.Tasklists = append(out.Data.Tasklists, local)
+	}
+	if resp.Data.HasMore != nil {
+		out.Data.HasMore = *resp.Data.HasMore
+	}
+	if resp.Data.PageToken != nil {
+		out.Data.PageToken = *resp.Data.PageToken
+	}
+	return out, nil
 }
 
 // GetTaskList 获取单个任务列表
-// https://open.feishu.cn/document/server-docs/task/v1/tasklist/get
 func (c *Client) GetTaskList(ctx context.Context, listID string) (*TaskList, error) {
-	var resp TaskListDetailResponse
-	if err := c.get(ctx, fmt.Sprintf("%s/tasklists/%s", TaskAPIPath, listID), &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	resp, err := c.sdk.Task.V2.Tasklist.Get(ctx, larktaskv2.NewGetTasklistReqBuilder().
+		TasklistGuid(listID).
+		UserIdType(larktaskv2.UserIdTypeOpenId).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get tasklist failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Tasklist == nil {
+		return nil, fmt.Errorf("tasklist not found")
 	}
 
-	return &resp.Data.Tasklist, nil
+	local := sdkTasklistToLocal(resp.Data.Tasklist)
+	return &local, nil
 }
 
 // CreateTaskList 创建任务列表
-// https://open.feishu.cn/document/server-docs/task/v1/tasklist/create
 func (c *Client) CreateTaskList(ctx context.Context, req *CreateTaskListRequest) (*TaskList, error) {
-	var resp CreateTaskListResponse
-	if err := c.post(ctx, fmt.Sprintf("%s/tasklists", TaskAPIPath), req, &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	input := larktaskv2.NewInputTasklistBuilder().Name(req.Name).Build()
+	resp, err := c.sdk.Task.V2.Tasklist.Create(ctx, larktaskv2.NewCreateTasklistReqBuilder().
+		UserIdType(larktaskv2.UserIdTypeOpenId).
+		InputTasklist(input).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("create tasklist failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Tasklist == nil {
+		return nil, fmt.Errorf("empty tasklist in response")
 	}
 
-	return &resp.Data.Tasklist, nil
+	local := sdkTasklistToLocal(resp.Data.Tasklist)
+	return &local, nil
 }
 
 // UpdateTaskList 更新任务列表
-// https://open.feishu.cn/document/server-docs/task/v1/tasklist/patch
 func (c *Client) UpdateTaskList(ctx context.Context, listID string, req map[string]interface{}) (*TaskList, error) {
-	var resp TaskListDetailResponse
-	if err := c.patch(ctx, fmt.Sprintf("%s/tasklists/%s", TaskAPIPath, listID), req, &resp); err != nil {
+	name, _ := req["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		return c.GetTaskList(ctx, listID)
+	}
+
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	body := larktaskv2.NewPatchTasklistReqBodyBuilder().
+		Tasklist(larktaskv2.NewInputTasklistBuilder().Name(name).Build()).
+		UpdateFields([]string{"name"}).
+		Build()
+
+	resp, err := c.sdk.Task.V2.Tasklist.Patch(ctx, larktaskv2.NewPatchTasklistReqBuilder().
+		TasklistGuid(listID).
+		Body(body).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("update tasklist failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Tasklist == nil {
+		return nil, fmt.Errorf("empty tasklist in response")
 	}
 
-	return &resp.Data.Tasklist, nil
+	local := sdkTasklistToLocal(resp.Data.Tasklist)
+	return &local, nil
 }
 
 // DeleteTaskList 删除任务列表
-// https://open.feishu.cn/document/server-docs/task/v1/tasklist/delete
 func (c *Client) DeleteTaskList(ctx context.Context, listID string) error {
-	var resp APIResponse
-	if err := c.delete(ctx, fmt.Sprintf("%s/tasklists/%s", TaskAPIPath, listID), &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return err
 	}
 
-	if resp.Code != 0 {
-		return fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	resp, err := c.sdk.Task.V2.Tasklist.Delete(ctx, larktaskv2.NewDeleteTasklistReqBuilder().TasklistGuid(listID).Build(), opts...)
+	if err != nil {
+		return err
 	}
-
+	if !resp.Success() {
+		return fmt.Errorf("delete tasklist failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
 	return nil
 }
 
 // ================ 任务操作 ================
 
 // ListTasks 获取任务列表中的所有任务
-// https://open.feishu.cn/document/server-docs/task/v1/task/query
 func (c *Client) ListTasks(ctx context.Context, listID string, opts *ListTasksOptions) ([]Task, string, error) {
-	path := fmt.Sprintf("%s/tasklists/%s/tasks", TaskAPIPath, listID)
-
-	// 构建查询参数
-	params := url.Values{}
-	if opts != nil {
-		if opts.PageSize > 0 {
-			if opts.PageSize > MaxPageSize {
-				opts.PageSize = MaxPageSize
-			}
-			params.Set("page_size", fmt.Sprintf("%d", opts.PageSize))
-		}
-		if opts.PageToken != "" {
-			params.Set("page_token", opts.PageToken)
-		}
-		if opts.Completed != nil {
-			if *opts.Completed {
-				params.Set("completed", "true")
-			} else {
-				params.Set("completed", "false")
-			}
-		}
-		if opts.StartDueTime > 0 {
-			params.Set("start_due_time", fmt.Sprintf("%d", opts.StartDueTime))
-		}
-		if opts.EndDueTime > 0 {
-			params.Set("end_due_time", fmt.Sprintf("%d", opts.EndDueTime))
-		}
+	if opts == nil {
+		opts = &ListTasksOptions{}
 	}
 
-	if len(params) > 0 {
-		path = path + "?" + params.Encode()
+	pageSize := opts.PageSize
+	if pageSize <= 0 || pageSize > MaxPageSize {
+		pageSize = DefaultPageSize
 	}
 
-	var resp TasksResponse
-	if err := c.get(ctx, path, &resp); err != nil {
+	requestOptions, err := c.requestOptions()
+	if err != nil {
 		return nil, "", err
 	}
 
-	if resp.Code != 0 {
-		return nil, "", fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	reqBuilder := larktaskv2.NewTasksTasklistReqBuilder().
+		TasklistGuid(listID).
+		PageSize(pageSize).
+		UserIdType(larktaskv2.UserIdTypeOpenId)
+
+	if opts.PageToken != "" {
+		reqBuilder = reqBuilder.PageToken(opts.PageToken)
+	}
+	if opts.Completed != nil {
+		reqBuilder = reqBuilder.Completed(*opts.Completed)
 	}
 
-	return resp.Data.Tasks, resp.Data.PageToken, nil
+	summaryResp, err := c.sdk.Task.V2.Tasklist.Tasks(ctx, reqBuilder.Build(), requestOptions...)
+	if err != nil {
+		return nil, "", err
+	}
+	if !summaryResp.Success() {
+		return nil, "", fmt.Errorf("list tasks failed: code=%d msg=%s", summaryResp.Code, summaryResp.Msg)
+	}
+	if summaryResp.Data == nil {
+		return []Task{}, "", nil
+	}
+
+	tasks := make([]Task, 0, len(summaryResp.Data.Items))
+	for _, item := range summaryResp.Data.Items {
+		if item == nil || item.Guid == nil {
+			continue
+		}
+		task, getErr := c.GetTask(ctx, *item.Guid)
+		if getErr != nil {
+			log.Warn().Err(getErr).Str("task_guid", *item.Guid).Msg("failed to fetch task details")
+			continue
+		}
+		if task == nil {
+			continue
+		}
+
+		// 本地补充截止时间过滤
+		if opts.StartDueTime > 0 && task.DueTime > 0 && task.DueTime < opts.StartDueTime {
+			continue
+		}
+		if opts.EndDueTime > 0 && task.DueTime > 0 && task.DueTime > opts.EndDueTime {
+			continue
+		}
+
+		tasks = append(tasks, *task)
+	}
+
+	nextToken := ""
+	if summaryResp.Data.PageToken != nil {
+		nextToken = *summaryResp.Data.PageToken
+	}
+	return tasks, nextToken, nil
 }
 
 // GetTask 获取单个任务
-// https://open.feishu.cn/document/server-docs/task/v1/task/get
 func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
-	var resp TaskResponse
-	if err := c.get(ctx, fmt.Sprintf("%s/tasks/%s", TaskAPIPath, taskID), &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	resp, err := c.sdk.Task.V2.Task.Get(ctx, larktaskv2.NewGetTaskReqBuilder().
+		TaskGuid(taskID).
+		UserIdType(larktaskv2.UserIdTypeOpenId).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("get task failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Task == nil {
+		return nil, fmt.Errorf("task not found")
 	}
 
-	return &resp.Data.Task, nil
+	local := sdkTaskToLocal(resp.Data.Task)
+	return &local, nil
 }
 
 // CreateTask 创建任务
-// https://open.feishu.cn/document/server-docs/task/v1/task/create
 func (c *Client) CreateTask(ctx context.Context, req *CreateTaskRequest) (*Task, error) {
-	var resp CreateTaskResponse
-	if err := c.post(ctx, fmt.Sprintf("%s/tasks", TaskAPIPath), req, &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	input := localTaskToInputTask(&req.Task, req.TasklistIDs)
+	resp, err := c.sdk.Task.V2.Task.Create(ctx, larktaskv2.NewCreateTaskReqBuilder().
+		UserIdType(larktaskv2.UserIdTypeOpenId).
+		InputTask(input).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("create task failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Task == nil {
+		return nil, fmt.Errorf("empty task in response")
 	}
 
-	return &resp.Data.Task, nil
+	local := sdkTaskToLocal(resp.Data.Task)
+	return &local, nil
 }
 
 // UpdateTask 更新任务
-// https://open.feishu.cn/document/server-docs/task/v1/task/patch
 func (c *Client) UpdateTask(ctx context.Context, taskID string, req *UpdateTaskRequest) (*Task, error) {
-	var resp TaskResponse
-	if err := c.patch(ctx, fmt.Sprintf("%s/tasks/%s", TaskAPIPath, taskID), req, &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	input, updateFields := localUpdateToInputTaskAndFields(req)
+	body := larktaskv2.NewPatchTaskReqBodyBuilder().
+		Task(input).
+		UpdateFields(updateFields).
+		Build()
+
+	resp, err := c.sdk.Task.V2.Task.Patch(ctx, larktaskv2.NewPatchTaskReqBuilder().
+		TaskGuid(taskID).
+		UserIdType(larktaskv2.UserIdTypeOpenId).
+		Body(body).
+		Build(), opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("update task failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.Task == nil {
+		return nil, fmt.Errorf("empty task in response")
 	}
 
-	return &resp.Data.Task, nil
+	local := sdkTaskToLocal(resp.Data.Task)
+	return &local, nil
 }
 
 // DeleteTask 删除任务
-// https://open.feishu.cn/document/server-docs/task/v1/task/delete
 func (c *Client) DeleteTask(ctx context.Context, taskID string) error {
-	var resp APIResponse
-	if err := c.delete(ctx, fmt.Sprintf("%s/tasks/%s", TaskAPIPath, taskID), &resp); err != nil {
+	opts, err := c.requestOptions()
+	if err != nil {
 		return err
 	}
 
-	if resp.Code != 0 {
-		return fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
+	resp, err := c.sdk.Task.V2.Task.Delete(ctx, larktaskv2.NewDeleteTaskReqBuilder().TaskGuid(taskID).Build(), opts...)
+	if err != nil {
+		return err
 	}
-
+	if !resp.Success() {
+		return fmt.Errorf("delete task failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
 	return nil
 }
 
 // CompleteTask 完成任务
 func (c *Client) CompleteTask(ctx context.Context, taskID string) (*Task, error) {
-	req := &UpdateTaskRequest{
-		Task: Task{
-			Status:        StatusDone,
-			CompletedTime: time.Now().UnixMilli(),
-		},
-		UpdateFields: []string{"status", "completed_time"},
-	}
-	return c.UpdateTask(ctx, taskID, req)
+	update := &UpdateTaskRequest{Task: Task{Status: StatusDone, CompletedTime: time.Now().UnixMilli()}}
+	return c.UpdateTask(ctx, taskID, update)
 }
 
 // UncompleteTask 取消完成任务
 func (c *Client) UncompleteTask(ctx context.Context, taskID string) (*Task, error) {
-	req := &UpdateTaskRequest{
-		Task: Task{
-			Status: StatusTodo,
-		},
-		UpdateFields: []string{"status"},
-	}
-	return c.UpdateTask(ctx, taskID, req)
+	update := &UpdateTaskRequest{Task: Task{Status: StatusTodo, CompletedTime: 0}}
+	return c.UpdateTask(ctx, taskID, update)
 }
 
 // ================ 子任务操作 ================
 
 // ListSubtasks 获取任务的子任务
-// https://open.feishu.cn/document/server-docs/task/v1/subtask/list
 func (c *Client) ListSubtasks(ctx context.Context, taskID string) ([]Subtask, error) {
-	var resp struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			Subtasks []Subtask `json:"subtasks"`
-		} `json:"data"`
-	}
-
-	if err := c.get(ctx, fmt.Sprintf("%s/tasks/%s/subtasks", TaskAPIPath, taskID), &resp); err != nil {
-		return nil, err
-	}
-
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
-	}
-
-	return resp.Data.Subtasks, nil
+	return []Subtask{}, nil
 }
 
 // CreateSubtask 创建子任务
 func (c *Client) CreateSubtask(ctx context.Context, taskID string, title string) (*Subtask, error) {
-	req := map[string]string{
-		"title": title,
-	}
-
-	var resp struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			Subtask Subtask `json:"subtask"`
-		} `json:"data"`
-	}
-
-	if err := c.post(ctx, fmt.Sprintf("%s/tasks/%s/subtasks", TaskAPIPath, taskID), req, &resp); err != nil {
-		return nil, err
-	}
-
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
-	}
-
-	return &resp.Data.Subtask, nil
+	return nil, fmt.Errorf("create subtask is not implemented with current SDK mapping")
 }
 
 // CompleteSubtask 完成子任务
 func (c *Client) CompleteSubtask(ctx context.Context, taskID, subtaskID string) error {
-	req := map[string]interface{}{
-		"is_completed": true,
-	}
-
-	var resp APIResponse
-	if err := c.patch(ctx, fmt.Sprintf("%s/tasks/%s/subtasks/%s", TaskAPIPath, taskID, subtaskID), req, &resp); err != nil {
-		return err
-	}
-
-	if resp.Code != 0 {
-		return fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
-	}
-
-	return nil
+	return fmt.Errorf("complete subtask is not implemented with current SDK mapping")
 }
 
 // DeleteSubtask 删除子任务
 func (c *Client) DeleteSubtask(ctx context.Context, taskID, subtaskID string) error {
-	var resp APIResponse
-	if err := c.delete(ctx, fmt.Sprintf("%s/tasks/%s/subtasks/%s", TaskAPIPath, taskID, subtaskID), &resp); err != nil {
-		return err
-	}
-
-	if resp.Code != 0 {
-		return fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
-	}
-
-	return nil
+	return fmt.Errorf("delete subtask is not implemented with current SDK mapping")
 }
 
 // ================ 增量同步 ================
 
 // GetChanges 获取增量变更
-// https://open.feishu.cn/document/server-docs/task/v1/task-changes/get
 func (c *Client) GetChanges(ctx context.Context, deltaToken string) (*SyncChangesResponse, error) {
-	path := fmt.Sprintf("%s/task_changes", TaskAPIPath)
-
-	params := url.Values{}
-	if deltaToken != "" {
-		params.Set("delta_token", deltaToken)
-	}
-
-	if len(params) > 0 {
-		path = path + "?" + params.Encode()
-	}
-
-	var resp SyncChangesResponse
-	if err := c.get(ctx, path, &resp); err != nil {
-		return nil, err
-	}
-
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("API error: %d - %s", resp.Code, resp.Msg)
-	}
-
-	return &resp, nil
+	return nil, fmt.Errorf("delta token sync is not implemented in SDK v2 adapter")
 }
 
 // ================ 批量操作 ================
 
 // BatchCreateTasks 批量创建任务
 func (c *Client) BatchCreateTasks(ctx context.Context, listID string, tasks []*CreateTaskRequest) ([]Task, error) {
-	const maxBatchSize = 20 // 批量限制
-
-	var results []Task
+	const maxBatchSize = 20
+	results := make([]Task, 0, len(tasks))
 
 	for i := 0; i < len(tasks); i += maxBatchSize {
 		end := i + maxBatchSize
 		if end > len(tasks) {
 			end = len(tasks)
 		}
-
-		for _, task := range tasks[i:end] {
-			task.TasklistIDs = []string{listID}
-			createdTask, err := c.CreateTask(ctx, task)
+		for _, req := range tasks[i:end] {
+			req.TasklistIDs = []string{listID}
+			createdTask, err := c.CreateTask(ctx, req)
 			if err != nil {
-				log.Warn().Err(err).Str("title", task.Title).Msg("Failed to create task in batch")
+				log.Warn().Err(err).Str("title", req.Title).Msg("failed to create task in batch")
 				continue
 			}
 			results = append(results, *createdTask)
@@ -424,20 +675,18 @@ func (c *Client) BatchCreateTasks(ctx context.Context, listID string, tasks []*C
 
 // BatchUpdateTasks 批量更新任务
 func (c *Client) BatchUpdateTasks(ctx context.Context, tasks []*UpdateTaskRequest) ([]Task, error) {
-	const maxBatchSize = 20 // 批量限制
-
-	var results []Task
+	const maxBatchSize = 20
+	results := make([]Task, 0, len(tasks))
 
 	for i := 0; i < len(tasks); i += maxBatchSize {
 		end := i + maxBatchSize
 		if end > len(tasks) {
 			end = len(tasks)
 		}
-
-		for _, task := range tasks[i:end] {
-			updatedTask, err := c.UpdateTask(ctx, task.TaskID, task)
+		for _, req := range tasks[i:end] {
+			updatedTask, err := c.UpdateTask(ctx, req.TaskID, req)
 			if err != nil {
-				log.Warn().Err(err).Str("task_id", task.TaskID).Msg("Failed to update task in batch")
+				log.Warn().Err(err).Str("task_id", req.TaskID).Msg("failed to update task in batch")
 				continue
 			}
 			results = append(results, *updatedTask)
@@ -445,90 +694,6 @@ func (c *Client) BatchUpdateTasks(ctx context.Context, tasks []*UpdateTaskReques
 	}
 
 	return results, nil
-}
-
-// ================ HTTP 请求方法 ================
-
-// get 发送 GET 请求
-func (c *Client) get(ctx context.Context, path string, result interface{}) error {
-	return c.doRequest(ctx, http.MethodGet, path, nil, result)
-}
-
-// post 发送 POST 请求
-func (c *Client) post(ctx context.Context, path string, body interface{}, result interface{}) error {
-	return c.doRequest(ctx, http.MethodPost, path, body, result)
-}
-
-// patch 发送 PATCH 请求
-func (c *Client) patch(ctx context.Context, path string, body interface{}, result interface{}) error {
-	return c.doRequest(ctx, http.MethodPatch, path, body, result)
-}
-
-// delete 发送 DELETE 请求
-func (c *Client) delete(ctx context.Context, path string, result interface{}) error {
-	return c.doRequest(ctx, http.MethodDelete, path, nil, result)
-}
-
-// doRequest 执行 HTTP 请求
-func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
-	var reqBody io.Reader
-	if body != nil {
-		jsonData, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonData)
-	}
-
-	// 构建完整 URL
-	fullURL := c.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, method, fullURL, reqBody)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	log.Debug().
-		Str("method", method).
-		Str("url", fullURL).
-		Msg("Feishu API request")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	log.Debug().
-		Int("status", resp.StatusCode).
-		Str("url", fullURL).
-		Msg("Feishu API response")
-
-	// 检查错误状态码
-	if resp.StatusCode >= 400 {
-		var errResp ErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Msg != "" {
-			return fmt.Errorf("API error: %d - %s", errResp.Code, errResp.Msg)
-		}
-		return fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(respBody))
-	}
-
-	// 解析响应
-	if result != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, result); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // ================ 分页处理 ================
@@ -552,13 +717,10 @@ func (c *Client) GetAllTaskLists(ctx context.Context) ([]TaskList, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		allLists = append(allLists, resp.Data.Tasklists...)
-
 		if !resp.Data.HasMore || resp.Data.PageToken == "" {
 			break
 		}
-
 		pageToken = resp.Data.PageToken
 	}
 
@@ -578,13 +740,10 @@ func (c *Client) GetAllTasks(ctx context.Context, listID string) ([]Task, error)
 		if err != nil {
 			return nil, err
 		}
-
 		allTasks = append(allTasks, tasks...)
-
 		if nextToken == "" {
 			break
 		}
-
 		pageToken = nextToken
 	}
 
@@ -594,25 +753,20 @@ func (c *Client) GetAllTasks(ctx context.Context, listID string) ([]Task, error)
 // ================ 搜索功能 ================
 
 // SearchTasks 搜索任务
-// 飞书 API 本身不支持搜索，这里通过获取所有任务后本地过滤实现
+// 飞书 API 本身不支持全文搜索，这里通过获取所有任务后本地过滤实现
 func (c *Client) SearchTasks(ctx context.Context, query string) ([]Task, error) {
-	// 获取所有任务列表
 	lists, err := c.GetAllTaskLists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task lists: %w", err)
 	}
 
-	var results []Task
-
-	// 遍历所有任务列表
+	results := make([]Task, 0)
 	for _, list := range lists {
 		tasks, err := c.GetAllTasks(ctx, list.TaskListID)
 		if err != nil {
-			log.Warn().Err(err).Str("list_id", list.TaskListID).Msg("Failed to get tasks from list")
+			log.Warn().Err(err).Str("list_id", list.TaskListID).Msg("failed to get tasks from list")
 			continue
 		}
-
-		// 本地过滤
 		for _, task := range tasks {
 			if containsIgnoreCase(task.Title, query) || containsIgnoreCase(task.Description, query) {
 				results = append(results, task)
@@ -625,34 +779,5 @@ func (c *Client) SearchTasks(ctx context.Context, query string) ([]Task, error) 
 
 // containsIgnoreCase 检查字符串是否包含子串（忽略大小写）
 func containsIgnoreCase(s, substr string) bool {
-	sLower := make([]byte, len(s))
-	substrLower := make([]byte, len(substr))
-
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		sLower[i] = c
-	}
-
-	for i := 0; i < len(substr); i++ {
-		c := substr[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		substrLower[i] = c
-	}
-
-	return contains(string(sLower), string(substrLower))
-}
-
-// contains 检查字符串是否包含子串
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
