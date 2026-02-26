@@ -5,13 +5,7 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
-)
-
-var (
-	// 版本信息 - 编译时通过 ldflags 注入
-	version   = "dev"
-	gitCommit = "unknown"
-	buildDate = "unknown"
+	"github.com/yeisme/taskbridge/pkg/buildinfo"
 )
 
 // versionCmd 版本命令
@@ -41,7 +35,7 @@ func runVersion(_ *cobra.Command, _ []string) {
   "build_date": "%s",
   "go_version": "%s",
   "platform": "%s/%s"
-}`, version, gitCommit, buildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}`, buildinfo.Version, buildinfo.GitCommit, buildinfo.BuildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		fmt.Println()
 		return
 	}
@@ -49,9 +43,9 @@ func runVersion(_ *cobra.Command, _ []string) {
 	fmt.Println()
 	fmt.Println("  TaskBridge - 连接 AI 与 Todo 软件的桥梁")
 	fmt.Println()
-	fmt.Printf("  版本:       %s\n", version)
-	fmt.Printf("  Git 提交:   %s\n", gitCommit)
-	fmt.Printf("  构建时间:   %s\n", buildDate)
+	fmt.Printf("  版本:       %s\n", buildinfo.Version)
+	fmt.Printf("  Git 提交:   %s\n", buildinfo.GitCommit)
+	fmt.Printf("  构建时间:   %s\n", buildinfo.BuildDate)
 	fmt.Printf("  Go 版本:    %s\n", runtime.Version())
 	fmt.Printf("  平台:       %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println()

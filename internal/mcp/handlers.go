@@ -1466,6 +1466,60 @@ type ProviderInfo struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+// ServerInfo MCP 服务信息
+type ServerInfo struct {
+	Name         string              `json:"name"`
+	Version      string              `json:"version"`
+	Transport    string              `json:"transport"`
+	Capabilities map[string][]string `json:"capabilities"`
+	Tools        []string            `json:"tools"`
+	Prompts      []string            `json:"prompts"`
+	Resources    []string            `json:"resources"`
+}
+
+// handleGetServerInfo 返回 MCP 版本和能力信息，供 AI 识别当前功能范围
+func (s *Server) handleGetServerInfo(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	_ = ctx
+	_ = req
+
+	toolsMap := s.GetTools()
+	tools := make([]string, 0, len(toolsMap))
+	for name := range toolsMap {
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+
+	promptsMap := s.GetPrompts()
+	prompts := make([]string, 0, len(promptsMap))
+	for name := range promptsMap {
+		prompts = append(prompts, name)
+	}
+	sort.Strings(prompts)
+
+	info := ServerInfo{
+		Name:      s.config.Name,
+		Version:   s.config.Version,
+		Transport: s.config.Transport,
+		Capabilities: map[string][]string{
+			"task_management":    {"list_tasks", "list_task_lists", "create_task", "update_task", "delete_task", "complete_task"},
+			"analysis":           {"analyze_quadrant", "analyze_priority"},
+			"project_management": {"create_project", "list_projects", "split_project", "confirm_project", "sync_project"},
+			"sync":               {"sync_pull", "sync_push"},
+			"provider":           {"list_providers", "get_provider_info", "get_provider_config_template"},
+			"prompt":             {"get_prompt"},
+			"server_meta":        {"get_server_info"},
+		},
+		Tools:     tools,
+		Prompts:   prompts,
+		Resources: []string{"taskbridge://tasks", "taskbridge://projects", "taskbridge://prompts"},
+	}
+
+	result, _ := toJSON(info)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: result}},
+	}, nil
+}
+
 // handleListProviders 处理列出 Providers 请求
 func (s *Server) handleListProviders(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// 从配置读取启用状态

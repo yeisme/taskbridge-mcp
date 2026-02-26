@@ -20,6 +20,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/internal/storage/filestore"
+	"github.com/yeisme/taskbridge/pkg/buildinfo"
 )
 
 var (
@@ -420,6 +421,14 @@ func getMCPTools() []MCPTool {
 			},
 		},
 		{
+			Name:        "get_server_info",
+			Description: "获取 MCP 服务版本、能力、工具与提示词清单",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
 			Name:        "create_task",
 			Description: "创建新任务",
 			InputSchema: map[string]interface{}{
@@ -624,7 +633,7 @@ func runMCPStart(cmd *cobra.Command, args []string) {
 		taskbridgeMCP.WithProjectStore(projectStore),
 		taskbridgeMCP.WithConfig(&taskbridgeMCP.ServerConfig{
 			Name:      "taskbridge",
-			Version:   "1.0.0",
+			Version:   buildinfo.Version,
 			Transport: mcpTransport,
 			Port:      mcpPort,
 		}),

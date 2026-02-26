@@ -13,6 +13,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/project"
 	"github.com/yeisme/taskbridge/internal/provider"
 	"github.com/yeisme/taskbridge/internal/storage"
+	"github.com/yeisme/taskbridge/pkg/buildinfo"
 	pkgconfig "github.com/yeisme/taskbridge/pkg/config"
 )
 
@@ -81,7 +82,7 @@ func NewServer(opts ...ServerOption) *Server {
 	s := &Server{
 		config: &ServerConfig{
 			Name:      "taskbridge",
-			Version:   "1.0.0",
+			Version:   buildinfo.Version,
 			Transport: "stdio",
 		},
 		providers: make(map[string]provider.Provider),
@@ -232,6 +233,9 @@ func (s *Server) registerTools() {
 
 	// Provider 工具
 	s.registerProviderTools()
+
+	// 元信息工具（版本/能力）
+	s.registerMetaTools()
 }
 
 // registerTaskTools 注册任务管理工具
@@ -568,6 +572,15 @@ func (s *Server) registerProviderTools() {
 	}, s.handleGetProviderConfigTemplate)
 }
 
+// registerMetaTools 注册元信息工具
+func (s *Server) registerMetaTools() {
+	s.server.AddTool(&mcp.Tool{
+		Name:        "get_server_info",
+		Description: "获取 MCP 服务版本、能力、工具与提示词清单，供 AI 判断可用功能",
+		InputSchema: json.RawMessage(`{"type": "object"}`),
+	}, s.handleGetServerInfo)
+}
+
 // registerPrompts 注册所有提示词
 func (s *Server) registerPrompts() {
 	// 四象限分析提示词
@@ -701,6 +714,7 @@ func (s *Server) GetTools() map[string]bool {
 		"list_providers":               true,
 		"get_provider_info":            true,
 		"get_provider_config_template": true,
+		"get_server_info":              true,
 	}
 }
 
