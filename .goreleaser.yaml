@@ -8,38 +8,73 @@
 
 version: 2
 
+project_name: taskbridge-mcp
+
 before:
   hooks:
     - go mod tidy
 
 builds:
   - id: taskbridge
+    binary: taskbridge-mcp
     env:
       - CGO_ENABLED=0
     ldflags:
       - -s -w -X github.com/yeisme/taskbridge/pkg/buildinfo.Version={{.Version}} -X github.com/yeisme/taskbridge/pkg/buildinfo.GitCommit={{.Commit}} -X github.com/yeisme/taskbridge/pkg/buildinfo.BuildDate={{.Date}}
-    goarch:
-      - amd64
-      - arm64
     goos:
       - linux
       - windows
       - darwin
+    goarch:
+      - amd64
+      - arm64
 
 archives:
-  - formats: [tar.gz]
-    # this name template makes the OS and Arch compatible with the results of `uname`.
+  - id: bundles
+    ids: [taskbridge]
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
+    files:
+      - README.md
+      - License
+      - docs/release-management.md
     format_overrides:
       - goos: windows
         formats: [zip]
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_source"
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+nfpms:
+  - id: linux-packages
+    ids: [taskbridge]
+    package_name: taskbridge-mcp
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    homepage: https://github.com/yeisme/taskbridge-mcp
+    maintainer: yeisme
+    description: TaskBridge MCP server for AI task management integration.
+    license: MIT
+    contents:
+      - src: README.md
+        dst: /usr/share/doc/taskbridge-mcp/README.md
+      - src: docs/release-management.md
+        dst: /usr/share/doc/taskbridge-mcp/release-management.md
+      - src: License
+        dst: /usr/share/licenses/taskbridge-mcp/LICENSE
 
 changelog:
   sort: asc

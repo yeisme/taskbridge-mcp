@@ -7,6 +7,7 @@
 - 统一版本来源（CLI 与 MCP 返回同一版本号）
 - 标准化发布步骤（tag + GoReleaser）
 - 让 AI/Agent 可以通过 MCP 工具读取当前版本与能力
+- 提供更多发行产物，降低不同平台用户使用门槛
 
 ## MCP 版本能力查询
 
@@ -31,6 +32,19 @@
 - `BuildDate`
 
 发布构建由 `.goreleaser.yaml` 通过 `ldflags` 注入真实值。
+
+## 当前打包矩阵
+
+- 二进制归档：
+  - Linux: `amd64` / `arm64`（`.tar.gz`）
+  - macOS: `amd64` / `arm64`（`.tar.gz`）
+  - Windows: `amd64` / `arm64`（`.zip`）
+- 源码包：
+  - `taskbridge-mcp_source.tar.gz`
+- Linux 包管理格式（随 Release 上传）：
+  - `.deb` / `.rpm` / `.apk`（`amd64` / `arm64`）
+
+说明：`386` 与 `armv7` 因第三方依赖不兼容已排除，避免发布失败。
 
 ## 发布前检查
 
