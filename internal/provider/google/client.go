@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/yeisme/taskbridge/internal/model"
@@ -238,6 +239,13 @@ func (c *Client) GetTask(ctx context.Context, tasklistID, taskID string) (*Task,
 // https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/insert
 func (c *Client) CreateTask(ctx context.Context, tasklistID string, task *Task) (*Task, error) {
 	u := fmt.Sprintf("%s/lists/%s/tasks", c.baseURL, tasklistID)
+	// Google Tasks 的子任务需要通过 query 参数 parent 指定父任务。
+	// 仅在 body 中携带 parent 往往会被忽略，导致任务落到根列表。
+	if task != nil && strings.TrimSpace(task.Parent) != "" {
+		params := url.Values{}
+		params.Set("parent", strings.TrimSpace(task.Parent))
+		u = u + "?" + params.Encode()
+	}
 
 	var result Task
 	if err := c.doRequest(ctx, http.MethodPost, u, task, &result); err != nil {
@@ -445,8 +453,8 @@ func FromModelTask(task *model.Task) *Task {
 
 	// 父任务
 	if task.ParentID != nil && *task.ParentID != "" {
-		// 提取原始 Google Task ID
-		gtask.Parent = task.SourceRawID
+		// Parent 需要的是 Google 远端父任务原始 ID，而不是当前任务 ID。
+		gtask.Parent = toGoogleRawParentID(*task.ParentID, task.ListID)
 	}
 
 	// 描述（包含元数据）
@@ -464,4 +472,17 @@ func FromModelTask(task *model.Task) *Task {
 	gtask.Notes = description
 
 	return gtask
+}
+
+func toGoogleRawParentID(parentID, listID string) string {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		return ""
+	}
+	prefix := fmt.Sprintf("google-%s-", listID)
+	if strings.HasPrefix(parentID, prefix) {
+		return strings.TrimPrefix(parentID, prefix)
+	}
+	// 若本身已是原始 ID，则直接返回。
+	return parentID
 }

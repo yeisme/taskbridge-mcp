@@ -229,9 +229,12 @@ func (c *Client) CreateChecklistItem(ctx context.Context, listID, taskID, displa
 }
 
 // UpdateChecklistItem 更新检查项
-func (c *Client) UpdateChecklistItem(ctx context.Context, listID, taskID, itemID string, isChecked bool) (*ChecklistItem, error) {
+func (c *Client) UpdateChecklistItem(ctx context.Context, listID, taskID, itemID, displayName string, isChecked bool) (*ChecklistItem, error) {
 	body := map[string]interface{}{
 		"isChecked": isChecked,
+	}
+	if strings.TrimSpace(displayName) != "" {
+		body["displayName"] = strings.TrimSpace(displayName)
 	}
 	var result ChecklistItem
 	if err := c.patch(ctx, fmt.Sprintf("/me/todo/lists/%s/tasks/%s/checklistItems/%s", listID, taskID, itemID), body, &result); err != nil {

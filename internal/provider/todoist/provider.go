@@ -136,10 +136,14 @@ func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.L
 	if err != nil {
 		return nil, err
 	}
+	sectionNames, err := p.listSectionNames(ctx, listID)
+	if err != nil {
+		return nil, err
+	}
 
 	result := make([]model.Task, 0, len(tasks))
 	for i := range tasks {
-		mTask := toModelTask(&tasks[i])
+		mTask := toModelTaskWithSection(&tasks[i], sectionNames[tasks[i].SectionID.String()])
 		if mTask == nil {
 			continue
 		}
@@ -167,7 +171,11 @@ func (p *Provider) GetTask(ctx context.Context, listID, taskID string) (*model.T
 	if err != nil {
 		return nil, err
 	}
-	mTask := toModelTask(task)
+	sectionNames, err := p.listSectionNames(ctx, listID)
+	if err != nil {
+		return nil, err
+	}
+	mTask := toModelTaskWithSection(task, sectionNames[task.SectionID.String()])
 	if mTask == nil {
 		return nil, fmt.Errorf("task is nil")
 	}
@@ -185,13 +193,17 @@ func (p *Provider) SearchTasks(ctx context.Context, query string) ([]model.Task,
 
 	var matched []model.Task
 	for _, project := range projects {
+		sectionNames, err := p.listSectionNames(ctx, project.ID.String())
+		if err != nil {
+			continue
+		}
 		tasks, err := p.client.ListTasks(ctx, project.ID.String())
 		if err != nil {
 			continue
 		}
 		for i := range tasks {
 			if containsIgnoreCase(tasks[i].Content, query) || containsIgnoreCase(tasks[i].Description, query) {
-				mTask := toModelTask(&tasks[i])
+				mTask := toModelTaskWithSection(&tasks[i], sectionNames[tasks[i].SectionID.String()])
 				if mTask == nil {
 					continue
 				}
@@ -281,6 +293,23 @@ func (p *Provider) GetTokenInfo() *provider.TokenInfo {
 		IsValid:     hasToken,
 		Refreshable: false,
 	}
+}
+
+func (p *Provider) listSectionNames(ctx context.Context, listID string) (map[string]string, error) {
+	sections, err := p.client.ListSections(ctx, listID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]string, len(sections))
+	for i := range sections {
+		id := sections[i].ID.String()
+		if id == "" {
+			continue
+		}
+		result[id] = strings.TrimSpace(sections[i].Name)
+	}
+	return result, nil
 }
 
 func loadAPITokenFromFile(path string) (string, error) {

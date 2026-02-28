@@ -79,6 +79,37 @@ func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
 	return c.doRequest(ctx, http.MethodDelete, "/projects/"+projectID, nil, nil)
 }
 
+// ListSections 列出板块。
+func (c *Client) ListSections(ctx context.Context, projectID string) ([]Section, error) {
+	var all []Section
+	cursor := ""
+	for {
+		path := "/sections"
+		v := url.Values{}
+		if projectID != "" {
+			v.Set("project_id", projectID)
+		}
+		if cursor != "" {
+			v.Set("cursor", cursor)
+		}
+		if len(v) > 0 {
+			path += "?" + v.Encode()
+		}
+
+		var resp pagedSectionsResponse
+		if err := c.doRequest(ctx, http.MethodGet, path, nil, &resp); err != nil {
+			return nil, err
+		}
+
+		all = append(all, resp.Results...)
+		if resp.NextCursor == "" {
+			break
+		}
+		cursor = resp.NextCursor
+	}
+	return all, nil
+}
+
 // ListTasks 列出任务。
 func (c *Client) ListTasks(ctx context.Context, projectID string) ([]Task, error) {
 	var all []Task

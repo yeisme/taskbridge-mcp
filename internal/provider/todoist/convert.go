@@ -8,6 +8,11 @@ import (
 	"github.com/yeisme/taskbridge/internal/model"
 )
 
+const (
+	todoistSectionIDField   = "todoist_section_id"
+	todoistSectionNameField = "todoist_section_name"
+)
+
 func toModelTaskList(project *Project) *model.TaskList {
 	if project == nil {
 		return nil
@@ -21,6 +26,10 @@ func toModelTaskList(project *Project) *model.TaskList {
 }
 
 func toModelTask(task *Task) *model.Task {
+	return toModelTaskWithSection(task, "")
+}
+
+func toModelTaskWithSection(task *Task, sectionName string) *model.Task {
 	if task == nil {
 		return nil
 	}
@@ -35,6 +44,18 @@ func toModelTask(task *Task) *model.Task {
 		Tags:        append([]string{}, task.Labels...),
 		Priority:    model.PriorityFromInt(task.Priority),
 		Status:      model.StatusTodo,
+	}
+	if task.SectionID.String() != "" || strings.TrimSpace(sectionName) != "" {
+		mTask.Metadata = model.NewTaskMetadata()
+		mTask.Metadata.SyncSource = string(model.SourceTodoist)
+		mTask.Metadata.LocalID = mTask.ID
+		mTask.Metadata.CustomFields = map[string]interface{}{}
+		if task.SectionID.String() != "" {
+			mTask.Metadata.CustomFields[todoistSectionIDField] = task.SectionID.String()
+		}
+		if strings.TrimSpace(sectionName) != "" {
+			mTask.Metadata.CustomFields[todoistSectionNameField] = strings.TrimSpace(sectionName)
+		}
 	}
 
 	if task.Checked {

@@ -106,8 +106,13 @@ func (p *Provider) Name() string { return p.name }
 
 func (p *Provider) DisplayName() string { return p.displayName }
 
-func (p *Provider) isDidaOpenAPI() bool {
-	return p.name == "dida"
+func (p *Provider) usesOpenAPI() bool {
+	switch p.name {
+	case "ticktick", "dida":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Provider) Authenticate(ctx context.Context, config map[string]interface{}) error {
@@ -139,7 +144,7 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 
 	if p.client.IsAuthenticated() {
 		var authErr error
-		if p.isDidaOpenAPI() {
+		if p.usesOpenAPI() {
 			_, authErr = p.client.OpenListProjects(ctx)
 		} else {
 			authErr = p.client.UserStatus(ctx)
@@ -183,7 +188,7 @@ func (p *Provider) RefreshToken(ctx context.Context) error {
 	if strings.TrimSpace(p.config.Username) == "" || p.config.Password == "" {
 		if p.client.IsAuthenticated() {
 			var err error
-			if p.isDidaOpenAPI() {
+			if p.usesOpenAPI() {
 				_, err = p.client.OpenListProjects(ctx)
 			} else {
 				err = p.client.UserStatus(ctx)
@@ -210,14 +215,23 @@ func (p *Provider) RefreshToken(ctx context.Context) error {
 }
 
 func (p *Provider) ListTaskLists(ctx context.Context) ([]model.TaskList, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		projects, err := p.client.OpenListProjects(ctx)
 		if err != nil {
 			return nil, err
 		}
-		result := make([]model.TaskList, 0, len(projects))
+		result := make([]model.TaskList, 0, len(projects)+1)
+		result = append(result, model.TaskList{
+			ID:          openInboxProjectID,
+			Name:        "Inbox",
+			Source:      p.source,
+			SourceRawID: openInboxProjectID,
+		})
 		for _, proj := range projects {
 			if strings.TrimSpace(proj.ID) == "" {
+				continue
+			}
+			if isOpenInboxProjectID(proj.ID) {
 				continue
 			}
 			result = append(result, model.TaskList{
@@ -260,7 +274,7 @@ func (p *Provider) ListTaskLists(ctx context.Context) ([]model.TaskList, error) 
 }
 
 func (p *Provider) CreateTaskList(ctx context.Context, name string) (*model.TaskList, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		created, err := p.client.OpenCreateProject(ctx, &OpenProjectCreateRequest{Name: name})
 		if err != nil {
 			return nil, err
@@ -292,7 +306,7 @@ func (p *Provider) CreateTaskList(ctx context.Context, name string) (*model.Task
 }
 
 func (p *Provider) DeleteTaskList(ctx context.Context, listID string) error {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		return p.client.OpenDeleteProject(ctx, listID)
 	}
 	_, err := p.client.BatchProject(ctx, &BatchProjectRequest{Delete: []string{listID}})
@@ -300,7 +314,7 @@ func (p *Provider) DeleteTaskList(ctx context.Context, listID string) error {
 }
 
 func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.ListOptions) ([]model.Task, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		lists := []string{listID}
 		if strings.TrimSpace(listID) == "" {
 			taskLists, err := p.ListTaskLists(ctx)
@@ -319,8 +333,15 @@ func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.L
 				return nil, err
 			}
 			listName := data.Project.Name
+			if isOpenInboxProjectID(lid) || strings.TrimSpace(listName) == "" {
+				listName = "Inbox"
+			}
 			for _, t := range data.Tasks {
 				mt := toModelOpenTask(t, listName, p.source)
+				if isOpenInboxProjectID(lid) {
+					mt.ListID = openInboxProjectID
+					mt.ListName = "Inbox"
+				}
 				if opts.Completed != nil && (mt.Status == model.StatusCompleted) != *opts.Completed {
 					continue
 				}
@@ -379,7 +400,7 @@ func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.L
 }
 
 func (p *Provider) GetTask(ctx context.Context, listID, taskID string) (*model.Task, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		if strings.TrimSpace(listID) != "" {
 			t, err := p.client.OpenGetTask(ctx, listID, taskID)
 			if err == nil {
@@ -413,7 +434,7 @@ func (p *Provider) GetTask(ctx context.Context, listID, taskID string) (*model.T
 }
 
 func (p *Provider) SearchTasks(ctx context.Context, query string) ([]model.Task, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		tasks, err := p.ListTasks(ctx, "", provider.ListOptions{})
 		if err != nil {
 			return nil, err
@@ -463,7 +484,7 @@ func (p *Provider) SearchTasks(ctx context.Context, query string) ([]model.Task,
 }
 
 func (p *Provider) CreateTask(ctx context.Context, listID string, task *model.Task) (*model.Task, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		if strings.TrimSpace(listID) == "" {
 			lists, err := p.ListTaskLists(ctx)
 			if err != nil {
@@ -523,7 +544,7 @@ func (p *Provider) CreateTask(ctx context.Context, listID string, task *model.Ta
 }
 
 func (p *Provider) UpdateTask(ctx context.Context, listID string, task *model.Task) (*model.Task, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		status := 0
 		if task.Status == model.StatusCompleted {
 			status = 2
@@ -577,7 +598,7 @@ func (p *Provider) UpdateTask(ctx context.Context, listID string, task *model.Ta
 }
 
 func (p *Provider) DeleteTask(ctx context.Context, listID, taskID string) error {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		if strings.TrimSpace(listID) == "" {
 			t, err := p.GetTask(ctx, "", taskID)
 			if err != nil {
@@ -616,7 +637,7 @@ func (p *Provider) BatchUpdate(ctx context.Context, listID string, tasks []*mode
 }
 
 func (p *Provider) GetChanges(ctx context.Context, since time.Time) (*provider.SyncChanges, error) {
-	if p.isDidaOpenAPI() {
+	if p.usesOpenAPI() {
 		tasks, err := p.ListTasks(ctx, "", provider.ListOptions{})
 		if err != nil {
 			return nil, err
@@ -830,6 +851,10 @@ func normalizeProviderName(name string) string {
 	default:
 		return "ticktick"
 	}
+}
+
+func isOpenInboxProjectID(projectID string) bool {
+	return strings.EqualFold(strings.TrimSpace(projectID), openInboxProjectID)
 }
 
 func providerProfile(providerName string) (baseURL, authBaseURL string, source model.TaskSource, displayName string) {

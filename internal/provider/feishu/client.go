@@ -181,6 +181,12 @@ func sdkTaskToLocal(task *larktaskv2.Task) Task {
 			}
 		}
 	}
+	if task.Creator != nil && task.Creator.Id != nil {
+		local.CreatorID = strings.TrimSpace(*task.Creator.Id)
+	}
+	if task.ParentTaskGuid != nil {
+		local.ParentTaskID = strings.TrimSpace(*task.ParentTaskGuid)
+	}
 
 	return local
 }
@@ -201,6 +207,25 @@ func sdkTasklistToLocal(list *larktaskv2.Tasklist) TaskList {
 	}
 	if list.UpdatedAt != nil {
 		local.CompletedTime = parseMillis(list.UpdatedAt)
+	}
+	if list.Creator != nil && list.Creator.Id != nil {
+		local.CreatorID = strings.TrimSpace(*list.Creator.Id)
+	}
+	if list.Owner != nil && list.Owner.Id != nil {
+		local.OwnerID = strings.TrimSpace(*list.Owner.Id)
+	}
+	if len(list.Members) > 0 {
+		local.MemberIDs = make([]string, 0, len(list.Members))
+		for _, m := range list.Members {
+			if m == nil || m.Id == nil {
+				continue
+			}
+			id := strings.TrimSpace(*m.Id)
+			if id == "" {
+				continue
+			}
+			local.MemberIDs = append(local.MemberIDs, id)
+		}
 	}
 	return local
 }
@@ -506,6 +531,67 @@ func (c *Client) ListTasks(ctx context.Context, listID string, opts *ListTasksOp
 	return tasks, nextToken, nil
 }
 
+// ListMyTasks 拉取“我的任务”视图，覆盖我负责/我创建/我参与的任务集合。
+func (c *Client) ListMyTasks(ctx context.Context, pageToken string, pageSize int) ([]Task, string, error) {
+	if pageSize <= 0 || pageSize > MaxPageSize {
+		pageSize = DefaultPageSize
+	}
+	requestOptions, err := c.requestOptions()
+	if err != nil {
+		return nil, "", err
+	}
+
+	reqBuilder := larktaskv2.NewListTaskReqBuilder().
+		PageSize(pageSize).
+		UserIdType(larktaskv2.UserIdTypeOpenId)
+	if pageToken != "" {
+		reqBuilder = reqBuilder.PageToken(pageToken)
+	}
+
+	resp, err := c.sdk.Task.V2.Task.List(ctx, reqBuilder.Build(), requestOptions...)
+	if err != nil {
+		return nil, "", err
+	}
+	if !resp.Success() {
+		return nil, "", fmt.Errorf("list my tasks failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data == nil {
+		return []Task{}, "", nil
+	}
+
+	tasks := make([]Task, 0, len(resp.Data.Items))
+	for _, item := range resp.Data.Items {
+		local := sdkTaskToLocal(item)
+		if local.TaskID == "" {
+			continue
+		}
+		tasks = append(tasks, local)
+	}
+	nextToken := ""
+	if resp.Data.PageToken != nil {
+		nextToken = *resp.Data.PageToken
+	}
+	return tasks, nextToken, nil
+}
+
+// GetAllMyTasks 获取“我的任务”视图下的全部任务（自动分页）。
+func (c *Client) GetAllMyTasks(ctx context.Context) ([]Task, error) {
+	var allTasks []Task
+	pageToken := ""
+	for {
+		tasks, nextToken, err := c.ListMyTasks(ctx, pageToken, DefaultPageSize)
+		if err != nil {
+			return nil, err
+		}
+		allTasks = append(allTasks, tasks...)
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+	return allTasks, nil
+}
+
 // GetTask 获取单个任务
 func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	opts, err := c.requestOptions()
@@ -622,7 +708,63 @@ func (c *Client) UncompleteTask(ctx context.Context, taskID string) (*Task, erro
 
 // ListSubtasks 获取任务的子任务
 func (c *Client) ListSubtasks(ctx context.Context, taskID string) ([]Subtask, error) {
-	return []Subtask{}, nil
+	subtasks, err := c.ListSubtaskTasks(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Subtask, 0, len(subtasks))
+	for _, t := range subtasks {
+		item := Subtask{
+			SubtaskID:    t.TaskID,
+			Title:        t.Title,
+			IsCompleted:  t.Status == StatusDone,
+			CompletedTime: t.CompletedTime,
+			CreatedTime:   t.CreatedTime,
+			CreatorID:     t.CreatorID,
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+// ListSubtaskTasks 获取任务的子任务（完整任务结构）。
+func (c *Client) ListSubtaskTasks(ctx context.Context, taskID string) ([]Task, error) {
+	opts, err := c.requestOptions()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Task, 0, 8)
+	pageToken := ""
+	for {
+		reqBuilder := larktaskv2.NewListTaskSubtaskReqBuilder().
+			TaskGuid(taskID).
+			PageSize(DefaultPageSize)
+		if pageToken != "" {
+			reqBuilder = reqBuilder.PageToken(pageToken)
+		}
+		resp, reqErr := c.sdk.Task.V2.TaskSubtask.List(ctx, reqBuilder.Build(), opts...)
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		if !resp.Success() {
+			return nil, fmt.Errorf("list subtasks failed: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		if resp.Data == nil || len(resp.Data.Items) == 0 {
+			break
+		}
+		for _, item := range resp.Data.Items {
+			local := sdkTaskToLocal(item)
+			if local.TaskID == "" {
+				continue
+			}
+			result = append(result, local)
+		}
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore || resp.Data.PageToken == nil || strings.TrimSpace(*resp.Data.PageToken) == "" {
+			break
+		}
+		pageToken = strings.TrimSpace(*resp.Data.PageToken)
+	}
+	return result, nil
 }
 
 // CreateSubtask 创建子任务

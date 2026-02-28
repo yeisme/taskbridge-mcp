@@ -192,16 +192,14 @@ taskbridge auth login feishu
 
 ## TickTick
 
-TickTick 使用 API Token 认证，无需创建开发者应用。
+TickTick 使用官方 OpenAPI Token 认证。
 
 ### 步骤 1: 获取 API Token
 
-1. 打开 [TickTick](https://ticktick.com) 并登录
-2. 打开浏览器开发者工具（F12）
-3. 切换到 **网络** 标签
-4. 刷新页面或进行任意操作
-5. 在请求中找到 `Cookie` 头，复制 `t=` 后面的 token 值
-6. Token 通常以 `tp_` 开头
+1. 打开 TickTick 开发者平台并登录
+2. 创建或查看个人 API Token
+3. 复制 Token
+4. Token 通常以 `tp_` 开头
 
 ### 步骤 2: 登录认证
 
@@ -213,23 +211,21 @@ taskbridge auth login ticktick
 
 ### 注意事项
 
-- TickTick 使用静态 Token，无需刷新
+- TickTick 使用官方静态 Token，无需刷新
 - Token 有效期较长，但建议定期检查
 
 ---
 
 ## 滴答清单 (Dida365)
 
-滴答清单是 TickTick 的国内版本，使用相同的认证方式。
+滴答清单是 TickTick 的国内版本，使用 OpenAPI Token 认证。
 
 ### 步骤 1: 获取 API Token
 
-1. 打开 [滴答清单](https://dida365.com) 并登录
-2. 打开浏览器开发者工具（F12）
-3. 切换到 **网络** 标签
-4. 刷新页面或进行任意操作
-5. 在请求中找到 `Cookie` 头，复制 `t=` 后面的 token 值
-6. Token 通常以 `dp_` 开头
+1. 打开滴答清单开发者平台并登录
+2. 创建或查看个人 API Token
+3. 复制 Token
+4. Token 通常以 `dp_` 开头
 
 ### 步骤 2: 登录认证
 

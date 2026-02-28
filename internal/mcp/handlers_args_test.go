@@ -39,3 +39,27 @@ func TestGetIntSlice(t *testing.T) {
 		t.Fatalf("unexpected array result: %#v", gotArray)
 	}
 }
+
+func TestSanitizeMarkdownText(t *testing.T) {
+	got := sanitizeMarkdownText("[ ] **设计免费版与付费版功能矩阵**：定义 Free/Pro/Enterprise")
+	want := "设计免费版与付费版功能矩阵：定义 Free/Pro/Enterprise"
+	if got != want {
+		t.Fatalf("unexpected sanitize result: got=%q want=%q", got, want)
+	}
+}
+
+func TestBuildMicrosoftStepLocalID(t *testing.T) {
+	got := buildMicrosoftStepLocalID("parent-raw-id", "step-id")
+	want := "ms-step-parent-raw-id-step-id"
+	if got != want {
+		t.Fatalf("unexpected ms step local id: got=%q want=%q", got, want)
+	}
+}
+
+func TestParseMicrosoftStepID(t *testing.T) {
+	got := parseMicrosoftStepID("ms_step:1413839e-bb07-4d2b-a32d-00baa44f793e")
+	want := "1413839e-bb07-4d2b-a32d-00baa44f793e"
+	if got != want {
+		t.Fatalf("unexpected ms step id: got=%q want=%q", got, want)
+	}
+}

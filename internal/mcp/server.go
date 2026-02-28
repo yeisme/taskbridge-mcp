@@ -332,7 +332,8 @@ func (s *Server) registerTaskTools() {
 				"title": {"type": "string", "description": "任务标题"},
 				"due_date": {"type": "string", "description": "截止日期 (YYYY-MM-DD)"},
 				"priority": {"type": "integer", "description": "优先级 (1-4)"},
-				"quadrant": {"type": "integer", "description": "象限 (1-4)"}
+				"quadrant": {"type": "integer", "description": "象限 (1-4)"},
+				"parent_id": {"type": "string", "description": "父任务 ID（用于创建子任务）"}
 			},
 			"required": ["title"]
 		}`),
@@ -458,6 +459,22 @@ func (s *Server) registerProjectTools() {
 			"required": ["project_id"]
 		}`),
 	}, s.handleSplitProject)
+
+	// Markdown 拆分项目工具
+	s.server.AddTool(&mcp.Tool{
+		Name:        "split_project_from_markdown",
+		Description: "将 Markdown 列表任务树解析为可确认的任务预览（含稳定任务 ID）",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"project_id": {"type": "string", "description": "项目 ID"},
+				"markdown": {"type": "string", "description": "Markdown 列表任务树"},
+				"horizon_days": {"type": "integer", "description": "规划周期天数（默认项目值或 14）"},
+				"max_tasks": {"type": "integer", "description": "最大任务数（默认 200，硬上限 500）"}
+			},
+			"required": ["project_id", "markdown"]
+		}`),
+	}, s.handleSplitProjectFromMarkdown)
 
 	// 确认项目工具
 	s.server.AddTool(&mcp.Tool{
@@ -706,6 +723,7 @@ func (s *Server) GetTools() map[string]bool {
 		"create_project":               true,
 		"list_projects":                true,
 		"split_project":                true,
+		"split_project_from_markdown":  true,
 		"confirm_project":              true,
 		"sync_project":                 true,
 		"get_prompt":                   true,

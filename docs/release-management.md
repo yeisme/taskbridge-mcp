@@ -1,6 +1,6 @@
 # TaskBridge 版本与发布流程
 
-当前稳定版本：`v1.0.0`（截至 2026-02-26）
+当前稳定版本：`v1.0.1`（截至 2026-02-28）
 
 ## 目标
 
@@ -50,7 +50,7 @@
 
 1. 工作区干净（或确认仅包含本次发布相关变更）
 2. 测试通过：`go test ./...`
-3. 版本与文档一致（例如 `v1.0.0`）
+3. 版本与文档一致（例如 `v1.0.1`）
 
 ## 发布步骤（GitHub Release）
 
@@ -58,20 +58,20 @@
 
 ```bash
 git add .
-git commit -m "release: v1.0.0"
+git commit -m "release: v1.0.1"
 ```
 
 2. 打标签
 
 ```bash
-git tag -a v1.0.0 -m "Release v1.0.0"
+git tag -a v1.0.1 -m "Release v1.0.1"
 ```
 
 3. 推送代码与标签
 
 ```bash
 git push origin main
-git push origin v1.0.0
+git push origin v1.0.1
 ```
 
 4. 运行 GoReleaser

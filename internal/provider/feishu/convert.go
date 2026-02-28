@@ -96,6 +96,10 @@ func ToModelTask(task *Task) *model.Task {
 	if len(task.SubtaskIDs) > 0 {
 		mTask.SubtaskIDs = task.SubtaskIDs
 	}
+	if task.ParentTaskID != "" {
+		parentID := task.ParentTaskID
+		mTask.ParentID = &parentID
+	}
 
 	// 标签转分类
 	if len(task.Tags) > 0 {

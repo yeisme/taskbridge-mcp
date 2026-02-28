@@ -300,6 +300,45 @@ func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.L
 				modelTask.ListName = listName
 			}
 			result = append(result, *modelTask)
+
+			// Microsoft 的子任务是 checklistItems，这里展开为本地子任务模型。
+			for _, item := range task.ChecklistItems {
+				parentID := modelTask.ID
+				subtask := model.Task{
+					ID:          fmt.Sprintf("ms-step-%s-%s", task.ID, item.ID),
+					Title:       item.DisplayName,
+					Status:      model.StatusTodo,
+					Source:      model.SourceMicrosoft,
+					SourceRawID: "ms_step:" + item.ID,
+					ListID:      listID,
+					ListName:    listName,
+					ParentID:    &parentID,
+					CreatedAt:   item.CreatedDateTime,
+					UpdatedAt:   item.LastModifiedDateTime,
+					Metadata: &model.TaskMetadata{
+						Version:    "1.0",
+						LastSyncAt: time.Now(),
+						SyncSource: "microsoft",
+						LocalID:    fmt.Sprintf("ms-step-%s-%s", task.ID, item.ID),
+						CustomFields: map[string]interface{}{
+							"tb_ms_step_id":              item.ID,
+							"tb_ms_parent_source_raw_id": task.ID,
+						},
+					},
+				}
+				if item.IsChecked {
+					subtask.Status = model.StatusCompleted
+					now := time.Now()
+					subtask.CompletedAt = &now
+				}
+				if subtask.CreatedAt.IsZero() {
+					subtask.CreatedAt = modelTask.CreatedAt
+				}
+				if subtask.UpdatedAt.IsZero() {
+					subtask.UpdatedAt = modelTask.UpdatedAt
+				}
+				result = append(result, subtask)
+			}
 		}
 	}
 
@@ -391,6 +430,22 @@ func (p *Provider) DeleteTask(ctx context.Context, listID, taskID string) error 
 	}
 
 	return p.client.DeleteTask(ctx, listID, taskID)
+}
+
+// CreateChecklistItem 在指定任务下创建步骤（Microsoft To Do checklist item）。
+func (p *Provider) CreateChecklistItem(ctx context.Context, listID, taskID, displayName string, isChecked bool) (*ChecklistItem, error) {
+	if !p.IsAuthenticated() {
+		return nil, fmt.Errorf("not authenticated")
+	}
+	return p.client.CreateChecklistItem(ctx, listID, taskID, displayName, isChecked)
+}
+
+// UpdateChecklistItem 更新步骤标题/完成状态。
+func (p *Provider) UpdateChecklistItem(ctx context.Context, listID, taskID, itemID, displayName string, isChecked bool) (*ChecklistItem, error) {
+	if !p.IsAuthenticated() {
+		return nil, fmt.Errorf("not authenticated")
+	}
+	return p.client.UpdateChecklistItem(ctx, listID, taskID, itemID, displayName, isChecked)
 }
 
 // ================ 批量操作 ================

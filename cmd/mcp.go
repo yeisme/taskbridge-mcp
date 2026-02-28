@@ -450,6 +450,10 @@ func getMCPTools() []MCPTool {
 						"type":        "integer",
 						"description": "象限 (1-4)",
 					},
+					"parent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "父任务 ID（用于创建子任务）",
+					},
 				},
 				"required": []string{"title"},
 			},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -194,6 +195,174 @@ func TestProjectHandlersLifecycle(t *testing.T) {
 	}
 }
 
+func TestSplitProjectFromMarkdownLifecycle(t *testing.T) {
+	tmp := t.TempDir()
+	ctx := context.Background()
+
+	taskStore, err := filestore.New(tmp, "json")
+	if err != nil {
+		t.Fatalf("new task store: %v", err)
+	}
+	projectStore, err := project.NewFileStore(tmp)
+	if err != nil {
+		t.Fatalf("new project store: %v", err)
+	}
+
+	s := &Server{
+		taskStore:    taskStore,
+		projectStore: projectStore,
+		providers:    map[string]provider.Provider{},
+	}
+
+	createRes, err := s.handleCreateProject(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"name":      "学习 k8s",
+		"goal_text": "学习 k8s",
+	}))
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	created := parseJSONResult(t, createRes)
+	projectID := created["id"].(string)
+
+	markdown := `- 学习k8s
+      - 缩进跳级节点
+  - 1. 学习 pods
+  - 2. 控制器
+这里是说明文本
+`
+	// 覆盖点：缩进跳级 warning + 非列表行 ignored + 叶子任务提取。
+	splitRes, err := s.handleSplitProjectFromMarkdown(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"project_id": projectID,
+		"markdown":   markdown,
+		"horizon_days": 10,
+	}))
+	if err != nil {
+		t.Fatalf("split markdown: %v", err)
+	}
+
+	split := parseJSONResult(t, splitRes)
+	planID := split["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("empty plan_id")
+	}
+
+	stats, ok := split["stats"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing stats")
+	}
+	if int(stats["leaf_tasks"].(float64)) != 3 {
+		t.Fatalf("unexpected leaf_tasks: %v", stats["leaf_tasks"])
+	}
+	if int(stats["ignored_lines"].(float64)) == 0 {
+		t.Fatalf("expected ignored_lines > 0")
+	}
+
+	taskIDs := extractPlanTaskIDs(t, split["tasks_preview"])
+	if len(taskIDs) != 4 {
+		t.Fatalf("expected 4 tasks, got %d", len(taskIDs))
+	}
+	for _, id := range taskIDs {
+		if len(id) == 0 || id[:4] != "ptk_" {
+			t.Fatalf("unexpected plan task id: %s", id)
+		}
+	}
+
+	splitResAgain, err := s.handleSplitProjectFromMarkdown(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"project_id": projectID,
+		"markdown":   markdown,
+		"horizon_days": 10,
+	}))
+	if err != nil {
+		t.Fatalf("split markdown again: %v", err)
+	}
+	splitAgain := parseJSONResult(t, splitResAgain)
+	taskIDsAgain := extractPlanTaskIDs(t, splitAgain["tasks_preview"])
+	// 同输入应得到同一组稳定 plan_task_id。
+	if !reflect.DeepEqual(taskIDs, taskIDsAgain) {
+		t.Fatalf("plan task ids not stable\nfirst:  %#v\nsecond: %#v", taskIDs, taskIDsAgain)
+	}
+
+	confirmRes, err := s.handleConfirmProject(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"project_id": projectID,
+		"plan_id":    planID,
+	}))
+	if err != nil {
+		t.Fatalf("confirm project: %v", err)
+	}
+	confirmed := parseJSONResult(t, confirmRes)
+	if int(confirmed["count"].(float64)) != 4 {
+		t.Fatalf("unexpected confirmed task count: %v", confirmed["count"])
+	}
+
+	tasks, err := taskStore.ListTasks(ctx, storage.ListOptions{})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	hasChild := false
+	for _, task := range tasks {
+		if task.Metadata == nil || task.Metadata.CustomFields == nil {
+			t.Fatalf("missing task metadata")
+		}
+		// confirm_project 需要把 plan_task_id 透传进任务 metadata。
+		if _, ok := task.Metadata.CustomFields["tb_plan_task_id"]; !ok {
+			t.Fatalf("missing tb_plan_task_id in metadata")
+		}
+		if task.ParentID != nil && *task.ParentID != "" {
+			hasChild = true
+			if _, ok := task.Metadata.CustomFields["tb_parent_plan_task_id"]; !ok {
+				t.Fatalf("missing tb_parent_plan_task_id in metadata for child task")
+			}
+		}
+	}
+	if !hasChild {
+		t.Fatalf("expected at least one child task")
+	}
+}
+
+func TestConfirmProjectBackwardCompatibleWithoutPlanTaskID(t *testing.T) {
+	tmp := t.TempDir()
+	ctx := context.Background()
+
+	taskStore, err := filestore.New(tmp, "json")
+	if err != nil {
+		t.Fatalf("new task store: %v", err)
+	}
+	projectStore, err := project.NewFileStore(tmp)
+	if err != nil {
+		t.Fatalf("new project store: %v", err)
+	}
+
+	s := &Server{
+		taskStore:    taskStore,
+		projectStore: projectStore,
+		providers:    map[string]provider.Provider{},
+	}
+
+	createRes, err := s.handleCreateProject(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"name": "legacy plan",
+	}))
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projectID := parseJSONResult(t, createRes)["id"].(string)
+
+	splitRes, err := s.handleSplitProject(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"project_id": projectID,
+	}))
+	if err != nil {
+		t.Fatalf("split project: %v", err)
+	}
+	planID := parseJSONResult(t, splitRes)["plan_id"].(string)
+
+	// 旧 split_project 产物没有 plan_task_id，也应可正常 confirm。
+	if _, err := s.handleConfirmProject(ctx, buildCallToolRequest(t, map[string]interface{}{
+		"project_id": projectID,
+		"plan_id":    planID,
+	})); err != nil {
+		t.Fatalf("confirm legacy plan: %v", err)
+	}
+}
+
 func buildCallToolRequest(t *testing.T, payload map[string]interface{}) *sdkmcp.CallToolRequest {
 	t.Helper()
 	body, err := json.Marshal(payload)
@@ -235,4 +404,22 @@ func parseJSONArrayResult(t *testing.T, result *sdkmcp.CallToolResult) []map[str
 		t.Fatalf("unmarshal array result: %v", err)
 	}
 	return out
+}
+
+func extractPlanTaskIDs(t *testing.T, raw interface{}) []string {
+	t.Helper()
+	items, ok := raw.([]interface{})
+	if !ok {
+		t.Fatalf("tasks_preview is not an array: %#v", raw)
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("task item is not an object: %#v", item)
+		}
+		id, _ := m["id"].(string)
+		ids = append(ids, id)
+	}
+	return ids
 }

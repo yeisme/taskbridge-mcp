@@ -354,7 +354,7 @@ Examples:
   taskbridge version --verbose
 
 输出示例:
-TaskBridge v1.0.0
+TaskBridge v1.0.1
   Go version: go1.22.0
   Platform: windows/amd64
   Build time: 2024-02-21T12:00:00Z

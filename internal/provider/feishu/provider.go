@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,11 @@ type Provider struct {
 	capabilities provider.Capabilities
 	mu           sync.RWMutex
 }
+
+const (
+	feishuVirtualMyTasksListID   = "feishu-my-tasks"
+	feishuVirtualMyTasksListName = "我的任务"
+)
 
 // Config 飞书 Provider 配置
 type Config struct {
@@ -197,8 +203,57 @@ func (p *Provider) ListTaskLists(ctx context.Context) ([]model.TaskList, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to list task lists: %w", err)
 	}
+	// 仅保留“我的任务 + 我创建/负责的清单”，避免拉取与当前账号无关的共享清单。
+	if p.oauth != nil {
+		if userInfo, err := p.oauth.GetUserInfo(ctx); err == nil && userInfo != nil {
+			openID := strings.TrimSpace(userInfo.Data.OpenID)
+			lists = filterTaskListsByOwnerOrCreator(lists, openID)
+		} else if err != nil {
+			log.Warn().Err(err).Msg("failed to fetch feishu user info, fallback to unfiltered task lists")
+		}
+	}
 
-	return ToModelTaskLists(lists), nil
+	modelLists := ToModelTaskLists(lists)
+	// 增加一个“我的任务”虚拟清单，覆盖飞书「全部任务/我负责」等视图中的任务。
+	modelLists = append([]model.TaskList{{
+		ID:          feishuVirtualMyTasksListID,
+		Name:        feishuVirtualMyTasksListName,
+		Source:      model.SourceFeishu,
+		SourceRawID: feishuVirtualMyTasksListID,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}}, modelLists...)
+	return modelLists, nil
+}
+
+func filterTaskListsByOwnerOrCreator(lists []TaskList, openID string) []TaskList {
+	openID = strings.TrimSpace(openID)
+	if openID == "" {
+		return lists
+	}
+	filtered := make([]TaskList, 0, len(lists))
+	for _, list := range lists {
+		name := strings.TrimSpace(list.Name)
+		if strings.EqualFold(name, "我的任务") || strings.EqualFold(name, "my tasks") {
+			filtered = append(filtered, list)
+			continue
+		}
+		creatorID := strings.TrimSpace(list.CreatorID)
+		ownerID := strings.TrimSpace(list.OwnerID)
+		if strings.EqualFold(creatorID, openID) || strings.EqualFold(ownerID, openID) || containsUserID(list.MemberIDs, openID) {
+			filtered = append(filtered, list)
+		}
+	}
+	return filtered
+}
+
+func containsUserID(ids []string, openID string) bool {
+	for _, id := range ids {
+		if strings.EqualFold(strings.TrimSpace(id), openID) {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateTaskList 创建任务列表
@@ -224,6 +279,47 @@ func (p *Provider) DeleteTaskList(ctx context.Context, listID string) error {
 
 // ListTasks 获取任务列表中的任务
 func (p *Provider) ListTasks(ctx context.Context, listID string, opts provider.ListOptions) ([]model.Task, error) {
+	if strings.TrimSpace(listID) == feishuVirtualMyTasksListID {
+		tasks, err := p.client.GetAllMyTasks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list my tasks: %w", err)
+		}
+		// 展开子任务：飞书“我的任务”接口通常只返回父任务，子任务需单独拉取。
+		allTasks := make([]Task, 0, len(tasks)+8)
+		allTasks = append(allTasks, tasks...)
+		exists := make(map[string]bool, len(tasks))
+		for _, t := range tasks {
+			if t.TaskID != "" {
+				exists[t.TaskID] = true
+			}
+		}
+		for _, parent := range tasks {
+			subtasks, subErr := p.client.ListSubtaskTasks(ctx, parent.TaskID)
+			if subErr != nil {
+				log.Warn().Err(subErr).Str("parent_task_id", parent.TaskID).Msg("failed to list feishu subtasks")
+				continue
+			}
+			for _, sub := range subtasks {
+				if sub.TaskID == "" || exists[sub.TaskID] {
+					continue
+				}
+				exists[sub.TaskID] = true
+				allTasks = append(allTasks, sub)
+			}
+		}
+
+		modelTasks := ToModelTasks(allTasks)
+		for i := range modelTasks {
+			if modelTasks[i].ListID == "" {
+				modelTasks[i].ListID = feishuVirtualMyTasksListID
+			}
+			if modelTasks[i].ListName == "" {
+				modelTasks[i].ListName = feishuVirtualMyTasksListName
+			}
+		}
+		return modelTasks, nil
+	}
+
 	// 转换选项
 	feishuOpts := &ListTasksOptions{
 		PageSize:  opts.PageSize,

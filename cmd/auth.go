@@ -570,11 +570,11 @@ func loginTickStyleProvider(providerName string) {
 	tokenPath := paths.GetTokenPath(providerName)
 	fmt.Printf("\n请按以下步骤获取 %s API Token:\n", displayName)
 	if providerName == "dida" {
-		fmt.Println("1. 打开 dida365.com 并登录")
+		fmt.Println("1. 打开 dida365.com 并登录开发者平台或 OpenAPI 管理页")
 	} else {
-		fmt.Println("1. 打开 ticktick.com 并登录")
+		fmt.Println("1. 打开 TickTick 开发者平台并登录")
 	}
-	fmt.Println("2. 打开浏览器开发者工具，查看请求中的 `t=` token")
+	fmt.Println("2. 创建或查看个人 API Token")
 	fmt.Printf("3. 复制 token（通常以 `%s` 开头）\n", tokenHint)
 	fmt.Println()
 

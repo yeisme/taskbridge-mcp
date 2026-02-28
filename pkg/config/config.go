@@ -119,7 +119,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		App: AppConfig{
 			Name:     "taskbridge",
-			Version:  "1.0.0",
+			Version:  "1.0.1",
 			LogLevel: "info",
 		},
 		Storage: StorageConfig{

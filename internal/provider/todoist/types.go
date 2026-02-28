@@ -49,6 +49,13 @@ type Project struct {
 	Name string `json:"name"`
 }
 
+// Section Todoist 板块。
+type Section struct {
+	ID        ID     `json:"id"`
+	ProjectID ID     `json:"project_id"`
+	Name      string `json:"name"`
+}
+
 // Due Todoist 截止时间。
 type Due struct {
 	Date     string `json:"date"`
@@ -61,6 +68,7 @@ type Due struct {
 type Task struct {
 	ID          ID       `json:"id"`
 	ProjectID   ID       `json:"project_id"`
+	SectionID   ID       `json:"section_id"`
 	Content     string   `json:"content"`
 	Description string   `json:"description"`
 	Checked     bool     `json:"checked"`
@@ -99,6 +107,11 @@ type UpdateTaskRequest struct {
 
 type pagedProjectsResponse struct {
 	Results    []Project `json:"results"`
+	NextCursor string    `json:"next_cursor"`
+}
+
+type pagedSectionsResponse struct {
+	Results    []Section `json:"results"`
 	NextCursor string    `json:"next_cursor"`
 }
 

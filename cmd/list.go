@@ -163,6 +163,10 @@ type TaskOutput struct {
 	ID            string   `json:"id"`
 	Title         string   `json:"title"`
 	Status        string   `json:"status"`
+	ParentID      string   `json:"parent_id,omitempty"`
+	SectionID     string   `json:"section_id,omitempty"`
+	SectionName   string   `json:"section_name,omitempty"`
+	SubtaskIDs    []string `json:"subtask_ids,omitempty"`
 	Quadrant      string   `json:"quadrant,omitempty"`
 	Priority      string   `json:"priority,omitempty"`
 	DueDate       string   `json:"due_date,omitempty"`
@@ -195,11 +199,21 @@ func toOutput(t model.Task) TaskOutput {
 	if t.DueDate != nil {
 		dueDate = t.DueDate.Format("2006-01-02")
 	}
+	parentID := ""
+	if t.ParentID != nil {
+		parentID = *t.ParentID
+	}
+	sectionID := getTaskCustomFieldString(t, "todoist_section_id")
+	sectionName := getTaskCustomFieldString(t, "todoist_section_name")
 
 	return TaskOutput{
 		ID:            t.ID,
 		Title:         t.Title,
 		Status:        string(t.Status),
+		ParentID:      parentID,
+		SectionID:     sectionID,
+		SectionName:   sectionName,
+		SubtaskIDs:    t.SubtaskIDs,
 		Quadrant:      quadrantNames[t.Quadrant],
 		Priority:      priorityNames[t.Priority],
 		DueDate:       dueDate,
@@ -210,6 +224,17 @@ func toOutput(t model.Task) TaskOutput {
 		Progress:      t.Progress,
 		PriorityScore: t.PriorityScore,
 	}
+}
+
+func getTaskCustomFieldString(t model.Task, key string) string {
+	if t.Metadata == nil || t.Metadata.CustomFields == nil {
+		return ""
+	}
+	raw, ok := t.Metadata.CustomFields[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
 }
 
 func printJSON(tasks []model.Task) {

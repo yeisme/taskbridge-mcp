@@ -3,6 +3,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -326,7 +327,9 @@ func (e *Engine) sameTaskContent(localTask, remoteTask *model.Task) bool {
 		localTask.Source != remoteTask.Source ||
 		localTask.SourceRawID != remoteTask.SourceRawID ||
 		localTask.Priority != remoteTask.Priority ||
-		localTask.Quadrant != remoteTask.Quadrant {
+		localTask.Quadrant != remoteTask.Quadrant ||
+		!sameStringPtr(localTask.ParentID, remoteTask.ParentID) ||
+		!sameMetadataCustomFields(localTask.Metadata, remoteTask.Metadata) {
 		return false
 	}
 	if !sameTimePtr(localTask.DueDate, remoteTask.DueDate) ||
@@ -358,6 +361,39 @@ func sameStringSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func sameStringPtr(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func sameMetadataCustomFields(a, b *model.TaskMetadata) bool {
+	var aFields map[string]any
+	var bFields map[string]any
+	if a != nil {
+		aFields = a.CustomFields
+	}
+	if b != nil {
+		bFields = b.CustomFields
+	}
+	if len(aFields) == 0 && len(bFields) == 0 {
+		return true
+	}
+	aJSON, err := json.Marshal(aFields)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(bFields)
+	if err != nil {
+		return false
+	}
+	return string(aJSON) == string(bJSON)
 }
 
 // push 推送任务到远程
@@ -627,11 +663,32 @@ func (e *Engine) GetStatus(ctx context.Context, providerName string) (*Status, e
 		lastSyncTime = *lastSync
 	}
 
+	localTasks, err := e.storage.ListTasks(ctx, storage.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	pendingChanges := 0
+	for _, task := range localTasks {
+		if task.Source != "" && task.Source != source && task.Source != model.SourceLocal {
+			continue
+		}
+
+		if task.SourceRawID == "" {
+			pendingChanges++
+			continue
+		}
+
+		if !lastSyncTime.IsZero() && task.UpdatedAt.After(lastSyncTime) {
+			pendingChanges++
+		}
+	}
+
 	return &Status{
 		Provider:       providerName,
 		Authenticated:  p.IsAuthenticated(),
 		LastSyncTime:   lastSyncTime,
-		PendingChanges: 0, // TODO: 实现变更检测
+		PendingChanges: pendingChanges,
 	}, nil
 }
 

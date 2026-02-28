@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/yeisme/taskbridge/internal/model"
@@ -33,7 +34,7 @@ func NewProvider(cfg Config) (*Provider, error) {
 	p := &Provider{
 		config: cfg,
 		capabilities: provider.Capabilities{
-			SupportsSubtasks:     false,
+			SupportsSubtasks:     true,
 			SupportsTags:         false,
 			SupportsCategories:   false,
 			SupportsReminder:     false,
@@ -305,9 +306,16 @@ func (p *Provider) CreateTask(ctx context.Context, listID string, task *model.Ta
 	}
 
 	gtask := FromModelTask(task)
+	desiredParent := strings.TrimSpace(gtask.Parent)
 	result, err := p.client.CreateTask(ctx, listID, gtask)
 	if err != nil {
 		return nil, err
+	}
+	// 某些情况下 insert 的 parent 可能被忽略，创建后再 move 一次兜底确保进入父任务。
+	if desiredParent != "" && result != nil && strings.TrimSpace(result.ID) != "" {
+		if moved, moveErr := p.client.MoveTask(ctx, listID, result.ID, MoveTaskOptions{Parent: desiredParent}); moveErr == nil && moved != nil {
+			result = moved
+		}
 	}
 
 	// 获取任务列表名称
@@ -333,9 +341,16 @@ func (p *Provider) UpdateTask(ctx context.Context, listID string, task *model.Ta
 	}
 
 	gtask := FromModelTask(task)
+	desiredParent := strings.TrimSpace(gtask.Parent)
 	result, err := p.client.UpdateTask(ctx, listID, gtask)
 	if err != nil {
 		return nil, err
+	}
+	// Google Tasks 子任务关系变更应通过 move 接口处理，而不是仅靠 update body。
+	if desiredParent != "" && result != nil && strings.TrimSpace(result.ID) != "" {
+		if moved, moveErr := p.client.MoveTask(ctx, listID, result.ID, MoveTaskOptions{Parent: desiredParent}); moveErr == nil && moved != nil {
+			result = moved
+		}
 	}
 
 	// 获取任务列表名称

@@ -19,6 +19,7 @@ const (
 	defaultOpenBaseURL  = "https://api.ticktick.com/open/v1"
 	didaOpenBaseURL     = "https://api.dida365.com/open/v1"
 	defaultRequestAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) taskbridge/1.0"
+	openInboxProjectID  = "inbox"
 )
 
 type Client struct {
@@ -136,7 +137,15 @@ func (c *Client) OpenDeleteProject(ctx context.Context, projectID string) error 
 
 func (c *Client) OpenProjectData(ctx context.Context, projectID string) (*OpenProjectData, error) {
 	var resp OpenProjectData
-	if err := c.doOpenRequest(ctx, http.MethodGet, c.openBaseURL+"/project/"+projectID+"/data", nil, &resp); err != nil {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("ticktick project id is empty")
+	}
+	url := c.openBaseURL + "/project/" + projectID + "/data"
+	if strings.EqualFold(projectID, openInboxProjectID) {
+		url = c.openBaseURL + "/project/" + openInboxProjectID + "/data"
+	}
+	if err := c.doOpenRequest(ctx, http.MethodGet, url, nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

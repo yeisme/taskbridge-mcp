@@ -76,6 +76,12 @@ type TaskList struct {
 	IsDeleted bool `json:"is_deleted,omitempty"`
 	// Source 来源
 	Source string `json:"source,omitempty"`
+	// CreatorID 清单创建者 ID（open_id）
+	CreatorID string `json:"creator_id,omitempty"`
+	// OwnerID 清单负责人 ID（open_id）
+	OwnerID string `json:"owner_id,omitempty"`
+	// MemberIDs 清单成员 ID（open_id）
+	MemberIDs []string `json:"member_ids,omitempty"`
 }
 
 // Task 飞书任务
@@ -117,6 +123,8 @@ type Task struct {
 	CollaboratorIDs []string `json:"collaborator_ids,omitempty"`
 	// CreatorID 创建者 ID
 	CreatorID string `json:"creator_id,omitempty"`
+	// ParentTaskID 父任务 ID（用于子任务关系）
+	ParentTaskID string `json:"parent_task_id,omitempty"`
 	// Tags 标签列表
 	Tags []Tag `json:"tags,omitempty"`
 	// Attachments 附件列表

@@ -16,7 +16,7 @@ before:
 
 builds:
   - id: taskbridge
-    binary: taskbridge-mcp
+    binary: taskbridge
     env:
       - CGO_ENABLED=0
     ldflags:

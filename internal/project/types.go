@@ -40,6 +40,10 @@ type Project struct {
 
 // PlanTask 拆分后的任务建议。
 type PlanTask struct {
+	// ID 是计划内任务 ID（非真实任务 ID），用于稳定映射与追踪。
+	ID              string   `json:"id,omitempty"`
+	// ParentID 是父计划任务 ID，用于在确认阶段恢复父子关系。
+	ParentID        string   `json:"parent_id,omitempty"`
 	Title           string   `json:"title"`
 	Description     string   `json:"description,omitempty"`
 	EstimateMinutes int      `json:"estimate_minutes"`

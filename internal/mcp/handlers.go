@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/project"
 	"github.com/yeisme/taskbridge/internal/projectplanner"
 	"github.com/yeisme/taskbridge/internal/provider"
+	msprovider "github.com/yeisme/taskbridge/internal/provider/microsoft"
 	"github.com/yeisme/taskbridge/internal/storage"
 )
 
@@ -280,6 +282,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest)
 		DueDate  string `json:"due_date"`
 		Priority int    `json:"priority"`
 		Quadrant int    `json:"quadrant"`
+		ParentID string `json:"parent_id"`
 	}
 	if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -328,6 +331,10 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest)
 		LocalID:    task.ID,
 		SyncSource: "local",
 	}
+	if strings.TrimSpace(params.ParentID) != "" {
+		parentID := strings.TrimSpace(params.ParentID)
+		task.ParentID = &parentID
+	}
 
 	// 保存任务到本地
 	if err := s.taskStore.SaveTask(ctx, task); err != nil {
@@ -352,7 +359,16 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest)
 			}
 
 			// 推送任务到 Google Tasks
-			createdTask, err := googleProvider.CreateTask(ctx, defaultListID, task)
+			taskToSync := *task
+			if taskToSync.ParentID != nil && strings.TrimSpace(*taskToSync.ParentID) != "" {
+				// 若 parent_id 是本地任务 ID，则尝试解析其 Google 远端 ID。
+				if parentTask, err := s.taskStore.GetTask(ctx, strings.TrimSpace(*taskToSync.ParentID)); err == nil && parentTask != nil && strings.TrimSpace(parentTask.SourceRawID) != "" {
+					parentRemote := strings.TrimSpace(parentTask.SourceRawID)
+					taskToSync.ParentID = &parentRemote
+				}
+			}
+			taskToSync = sanitizeTaskForRemote(taskToSync)
+			createdTask, err := googleProvider.CreateTask(ctx, defaultListID, &taskToSync)
 			if err == nil {
 				// 更新本地任务信息
 				task.SourceRawID = createdTask.SourceRawID
@@ -867,6 +883,8 @@ func (s *Server) handleConfirmProject(ctx context.Context, req *mcp.CallToolRequ
 		}
 
 		now := time.Now()
+		// 维护 plan_task_id -> 本地任务 ID 映射，用于恢复父子关系。
+		planToLocalID := make(map[string]string, len(plan.TasksPreview))
 		for idx, planTask := range plan.TasksPreview {
 			task := &model.Task{
 				ID:          generateID(),
@@ -897,10 +915,26 @@ func (s *Server) handleConfirmProject(ctx context.Context, req *mcp.CallToolRequ
 					"tb_step_index": idx + 1,
 				},
 			}
+			if strings.TrimSpace(planTask.ParentID) != "" {
+				if parentLocalID, ok := planToLocalID[strings.TrimSpace(planTask.ParentID)]; ok {
+					parentID := parentLocalID
+					task.ParentID = &parentID
+				}
+			}
+			if strings.TrimSpace(planTask.ID) != "" {
+				// 兼容新旧计划：仅当计划任务含稳定 ID 时才写入 metadata。
+				task.Metadata.CustomFields["tb_plan_task_id"] = strings.TrimSpace(planTask.ID)
+			}
+			if strings.TrimSpace(planTask.ParentID) != "" {
+				task.Metadata.CustomFields["tb_parent_plan_task_id"] = strings.TrimSpace(planTask.ParentID)
+			}
 			if err := s.taskStore.SaveTask(ctx, task); err != nil {
 				return nil, fmt.Errorf("failed to save task from plan: %w", err)
 			}
 			createdTaskIDs = append(createdTaskIDs, task.ID)
+			if strings.TrimSpace(planTask.ID) != "" {
+				planToLocalID[strings.TrimSpace(planTask.ID)] = task.ID
+			}
 		}
 	}
 
@@ -1000,7 +1034,20 @@ func (s *Server) handleSyncProject(ctx context.Context, req *mcp.CallToolRequest
 	defaultListID := s.findDefaultListID(taskLists)
 
 	resultPayload := &SyncPushResult{Provider: resolvedProvider}
-	s.pushLocalTasks(ctx, p, projectTasks, defaultListID, model.TaskSource(resolvedProvider), false, resultPayload)
+	targetSource := model.TaskSource(resolvedProvider)
+	if targetSource == model.SourceGoogle {
+		planTaskToLocalID := buildPlanTaskToLocalIDMap(projectTasks)
+		parentTasks, childTasks := splitTasksByParentRelation(projectTasks, planTaskToLocalID)
+		s.pushLocalTasks(ctx, p, parentTasks, defaultListID, targetSource, false, resultPayload)
+		if len(childTasks) > 0 {
+			if err := s.pullProviderTasksIntoLocal(ctx, p, resolvedProvider); err != nil {
+				resultPayload.Errors = append(resultPayload.Errors, fmt.Sprintf("pull-before-children: %v", err))
+			}
+			s.pushLocalTasks(ctx, p, childTasks, defaultListID, targetSource, false, resultPayload)
+		}
+	} else {
+		s.pushLocalTasks(ctx, p, projectTasks, defaultListID, targetSource, false, resultPayload)
+	}
 
 	item, err := s.projectStore.GetProject(ctx, params.ProjectID)
 	if err == nil {
@@ -1264,8 +1311,22 @@ func (s *Server) handleSyncPush(ctx context.Context, req *mcp.CallToolRequest) (
 	// 查找默认列表
 	defaultListID := s.findDefaultListID(taskLists)
 
-	// 推送本地任务到远程
-	s.pushLocalTasks(ctx, p, localTasks, defaultListID, targetSource, params.DryRun, result)
+	// Google 采用两阶段：先推父任务，再 pull，再推子任务，避免子任务落在根层。
+	if targetSource == model.SourceGoogle {
+		planTaskToLocalID := buildPlanTaskToLocalIDMap(localTasks)
+		parentTasks, childTasks := splitTasksByParentRelation(localTasks, planTaskToLocalID)
+		s.pushLocalTasks(ctx, p, parentTasks, defaultListID, targetSource, params.DryRun, result)
+		if len(childTasks) > 0 {
+			if !params.DryRun {
+				if err := s.pullProviderTasksIntoLocal(ctx, p, resolvedProvider); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("pull-before-children: %v", err))
+				}
+			}
+			s.pushLocalTasks(ctx, p, childTasks, defaultListID, targetSource, params.DryRun, result)
+		}
+	} else {
+		s.pushLocalTasks(ctx, p, localTasks, defaultListID, targetSource, params.DryRun, result)
+	}
 
 	// 删除远程多余任务
 	if params.DeleteRemote {
@@ -1312,40 +1373,75 @@ func (s *Server) findDefaultListID(taskLists []model.TaskList) string {
 
 // pushLocalTasks 推送本地任务到远程
 func (s *Server) pushLocalTasks(ctx context.Context, p provider.Provider, tasks []model.Task, defaultListID string, source model.TaskSource, dryRun bool, result *SyncPushResult) {
-	for _, task := range tasks {
+	planTaskToLocalID := buildPlanTaskToLocalIDMap(tasks)
+	ordered := orderTasksByParent(tasks, planTaskToLocalID)
+	remoteByLocalID := make(map[string]string, len(ordered))
+	for _, task := range ordered {
 		// 只同步本地任务或目标 provider 的任务，避免跨 provider 推送污染。
 		if task.Source != "" && task.Source != source && task.Source != model.SourceLocal {
 			continue
 		}
-
-		if task.SourceRawID != "" {
-			// 任务已存在远程，检查是否需要更新
-			existingTask, err := p.GetTask(ctx, task.ListID, task.SourceRawID)
-			if err == nil && existingTask != nil {
-				if existingTask.UpdatedAt.Before(task.UpdatedAt) {
-					if !dryRun {
-						_, err := p.UpdateTask(ctx, task.ListID, &task)
-						if err != nil {
-							result.Errors = append(result.Errors, fmt.Sprintf("update %s: %v", task.ID, err))
-							continue
-						}
-					}
-					result.Updated++
-				}
-				continue
-			}
-		}
-
-		// 创建新任务
 		listID := task.ListID
 		if listID == "" {
 			listID = defaultListID
 		}
 
+		parentRemoteID := ""
+		parentLocalID := localParentIDFromTask(task, planTaskToLocalID)
+		if parentLocalID != "" {
+			parentRemoteID = remoteByLocalID[parentLocalID]
+			if parentRemoteID == "" {
+				parentRemoteID = s.findRemoteIDByLocalParent(ctx, tasks, parentLocalID, source)
+			}
+			// 若 parent_id 已经是 google-<listID>-<rawID> 结构，直接提取 rawID。
+			if parentRemoteID == "" && source == model.SourceGoogle {
+				parentRemoteID = toGoogleParentRawID(parentLocalID, listID)
+			}
+			// 子任务必须绑定父任务；若父任务映射缺失，跳过本次创建，避免散落到根层。
+			if parentRemoteID == "" {
+				result.Errors = append(result.Errors, fmt.Sprintf("skip child %s: parent remote id not resolved", task.ID))
+				continue
+			}
+		}
+
+		// Microsoft To Do：子任务要映射为父任务的 checklist step，而非独立任务。
+		if source == model.SourceMicrosoft && parentRemoteID != "" {
+			if err := s.syncMicrosoftChecklistStep(ctx, p, listID, parentRemoteID, &task, dryRun, result); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("step %s: %v", task.ID, err))
+			}
+			continue
+		}
+
+		taskToSync := sanitizeTaskForRemote(task)
+		// Google Tasks：子任务使用 parent 字段创建在父任务下。
+		if source == model.SourceGoogle && parentRemoteID != "" {
+			taskToSync.ParentID = &parentRemoteID
+		}
+
+		if taskToSync.SourceRawID != "" {
+			// 任务已存在远程，检查是否需要更新
+			existingTask, err := p.GetTask(ctx, listID, taskToSync.SourceRawID)
+			if err == nil && existingTask != nil {
+				if existingTask.UpdatedAt.Before(taskToSync.UpdatedAt) {
+					if !dryRun {
+						_, err := p.UpdateTask(ctx, listID, &taskToSync)
+						if err != nil {
+							result.Errors = append(result.Errors, fmt.Sprintf("update %s: %v", taskToSync.ID, err))
+							continue
+						}
+					}
+					result.Updated++
+				}
+				remoteByLocalID[task.ID] = taskToSync.SourceRawID
+				continue
+			}
+		}
+
+		// 创建新任务
 		if !dryRun {
-			createdTask, err := p.CreateTask(ctx, listID, &task)
+			createdTask, err := p.CreateTask(ctx, listID, &taskToSync)
 			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("create %s: %v", task.ID, err))
+				result.Errors = append(result.Errors, fmt.Sprintf("create %s: %v", taskToSync.ID, err))
 				continue
 			}
 			// 更新本地任务信息
@@ -1353,9 +1449,298 @@ func (s *Server) pushLocalTasks(ctx context.Context, p provider.Provider, tasks 
 			task.ListID = listID
 			task.Source = source
 			_ = s.taskStore.SaveTask(ctx, &task)
+			remoteByLocalID[task.ID] = task.SourceRawID
+		} else if task.SourceRawID != "" {
+			remoteByLocalID[task.ID] = task.SourceRawID
 		}
 		result.Pushed++
 	}
+}
+
+func (s *Server) syncMicrosoftChecklistStep(ctx context.Context, p provider.Provider, listID, parentRemoteID string, task *model.Task, dryRun bool, result *SyncPushResult) error {
+	msProvider, ok := p.(*msprovider.Provider)
+	if !ok {
+		return fmt.Errorf("provider is not microsoft")
+	}
+	if listID == "" {
+		return fmt.Errorf("list id is required for microsoft checklist step")
+	}
+
+	stepID := ""
+	if task.Metadata != nil && task.Metadata.CustomFields != nil {
+		if v, ok := task.Metadata.CustomFields["tb_ms_step_id"]; ok {
+			stepID = strings.TrimSpace(fmt.Sprint(v))
+		}
+	}
+	if stepID == "" {
+		stepID = parseMicrosoftStepID(task.SourceRawID)
+	}
+	isChecked := task.Status == model.StatusCompleted
+
+	cleanTitle := sanitizeMarkdownText(task.Title)
+	if dryRun {
+		if stepID == "" {
+			result.Pushed++
+		} else {
+			result.Updated++
+		}
+		return nil
+	}
+
+	if stepID == "" {
+		item, err := msProvider.CreateChecklistItem(ctx, listID, parentRemoteID, cleanTitle, isChecked)
+		if err != nil {
+			return err
+		}
+		originalID := task.ID
+		canonicalID := buildMicrosoftStepLocalID(parentRemoteID, item.ID)
+		if task.Metadata == nil {
+			task.Metadata = &model.TaskMetadata{Version: "1.0", CustomFields: map[string]interface{}{}}
+		}
+		if task.Metadata.CustomFields == nil {
+			task.Metadata.CustomFields = map[string]interface{}{}
+		}
+		task.Metadata.CustomFields["tb_ms_step_id"] = item.ID
+		task.Metadata.CustomFields["tb_ms_parent_source_raw_id"] = parentRemoteID
+		task.Metadata.LocalID = canonicalID
+		task.ID = canonicalID
+		task.SourceRawID = "ms_step:" + item.ID
+		task.Source = model.SourceMicrosoft
+		task.ListID = listID
+		_ = s.taskStore.SaveTask(ctx, task)
+		if originalID != "" && originalID != canonicalID {
+			_ = s.taskStore.DeleteTask(ctx, originalID)
+		}
+		result.Pushed++
+		return nil
+	}
+
+	if _, err := msProvider.UpdateChecklistItem(ctx, listID, parentRemoteID, stepID, cleanTitle, isChecked); err != nil {
+		return err
+	}
+	canonicalID := buildMicrosoftStepLocalID(parentRemoteID, stepID)
+	if task.Metadata == nil {
+		task.Metadata = &model.TaskMetadata{Version: "1.0", CustomFields: map[string]interface{}{}}
+	}
+	if task.Metadata.CustomFields == nil {
+		task.Metadata.CustomFields = map[string]interface{}{}
+	}
+	task.Metadata.CustomFields["tb_ms_step_id"] = stepID
+	task.Metadata.CustomFields["tb_ms_parent_source_raw_id"] = parentRemoteID
+	task.Metadata.LocalID = canonicalID
+	task.ID = canonicalID
+	task.SourceRawID = "ms_step:" + stepID
+	task.Source = model.SourceMicrosoft
+	task.ListID = listID
+	_ = s.taskStore.SaveTask(ctx, task)
+	result.Updated++
+	return nil
+}
+
+func orderTasksByParent(tasks []model.Task, planTaskToLocalID map[string]string) []model.Task {
+	byID := make(map[string]model.Task, len(tasks))
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+
+	visited := make(map[string]bool, len(tasks))
+	inStack := make(map[string]bool, len(tasks))
+	ordered := make([]model.Task, 0, len(tasks))
+
+	var visit func(id string)
+	visit = func(id string) {
+		if visited[id] {
+			return
+		}
+		if inStack[id] {
+			return
+		}
+		task, ok := byID[id]
+		if !ok {
+			return
+		}
+		inStack[id] = true
+		parentLocalID := localParentIDFromTask(task, planTaskToLocalID)
+		if parentLocalID != "" {
+			visit(parentLocalID)
+		}
+		inStack[id] = false
+		visited[id] = true
+		ordered = append(ordered, task)
+	}
+
+	for _, task := range tasks {
+		visit(task.ID)
+	}
+	return ordered
+}
+
+func (s *Server) findRemoteIDByLocalParent(ctx context.Context, tasks []model.Task, parentLocalID string, source model.TaskSource) string {
+	for _, task := range tasks {
+		if task.ID != parentLocalID {
+			continue
+		}
+		if task.SourceRawID != "" && (task.Source == source || task.Source == model.SourceLocal || task.Source == "") {
+			return task.SourceRawID
+		}
+		break
+	}
+
+	// 第二阶段（仅子任务切片）时，父任务可能不在当前 tasks 切片里，直接回查存储。
+	if s.taskStore != nil {
+		if parentTask, err := s.taskStore.GetTask(ctx, parentLocalID); err == nil && parentTask != nil {
+			if parentTask.SourceRawID != "" && (parentTask.Source == source || parentTask.Source == model.SourceLocal || parentTask.Source == "") {
+				return parentTask.SourceRawID
+			}
+		}
+	}
+
+	// 兼容按 plan_task_id 关联的历史数据：父引用可能不是本地 task.ID。
+	if s.taskStore != nil {
+		all, err := s.taskStore.ListTasks(ctx, storage.ListOptions{})
+		if err == nil {
+			for _, task := range all {
+				if getCustomFieldString(task, "tb_plan_task_id") != parentLocalID {
+					continue
+				}
+				if task.SourceRawID != "" && (task.Source == source || task.Source == model.SourceLocal || task.Source == "") {
+					return task.SourceRawID
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func buildPlanTaskToLocalIDMap(tasks []model.Task) map[string]string {
+	result := make(map[string]string, len(tasks))
+	for _, task := range tasks {
+		planTaskID := getCustomFieldString(task, "tb_plan_task_id")
+		if planTaskID == "" {
+			continue
+		}
+		result[planTaskID] = task.ID
+	}
+	return result
+}
+
+// localParentIDFromTask 兼容两种父子表示：
+// 1. 直接 ParentID（推荐）
+// 2. 通过 tb_parent_plan_task_id -> tb_plan_task_id 映射恢复（兼容历史数据）
+func localParentIDFromTask(task model.Task, planTaskToLocalID map[string]string) string {
+	if task.ParentID != nil {
+		if parentID := strings.TrimSpace(*task.ParentID); parentID != "" {
+			return parentID
+		}
+	}
+	parentPlanTaskID := getCustomFieldString(task, "tb_parent_plan_task_id")
+	if parentPlanTaskID == "" {
+		return ""
+	}
+	return strings.TrimSpace(planTaskToLocalID[parentPlanTaskID])
+}
+
+func getCustomFieldString(task model.Task, key string) string {
+	if task.Metadata == nil || task.Metadata.CustomFields == nil {
+		return ""
+	}
+	raw, ok := task.Metadata.CustomFields[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+func toGoogleParentRawID(parentID, listID string) string {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" || listID == "" {
+		return ""
+	}
+	prefix := "google-" + listID + "-"
+	if strings.HasPrefix(parentID, prefix) {
+		return strings.TrimPrefix(parentID, prefix)
+	}
+	return ""
+}
+
+func splitTasksByParentRelation(tasks []model.Task, planTaskToLocalID map[string]string) ([]model.Task, []model.Task) {
+	parents := make([]model.Task, 0, len(tasks))
+	children := make([]model.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if localParentIDFromTask(task, planTaskToLocalID) == "" {
+			parents = append(parents, task)
+			continue
+		}
+		children = append(children, task)
+	}
+	return parents, children
+}
+
+// pullProviderTasksIntoLocal 拉取远端任务到本地，用于在二阶段同步前刷新父任务的远端映射。
+func (s *Server) pullProviderTasksIntoLocal(ctx context.Context, p provider.Provider, providerName string) error {
+	taskLists, err := p.ListTaskLists(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list remote task lists: %w", err)
+	}
+	for _, list := range taskLists {
+		_ = s.taskStore.SaveTaskList(ctx, &list)
+		tasks, err := p.ListTasks(ctx, list.ID, provider.ListOptions{})
+		if err != nil {
+			continue
+		}
+		for _, task := range tasks {
+			if task.ListID == "" {
+				task.ListID = list.ID
+			}
+			if task.ListName == "" {
+				task.ListName = list.Name
+			}
+			if task.Source == "" {
+				task.Source = model.TaskSource(providerName)
+			}
+			_ = s.taskStore.SaveTask(ctx, &task)
+		}
+	}
+	return nil
+}
+
+var markdownCheckboxPrefixPattern = regexp.MustCompile(`^\s*\[\s*[xX ]?\s*\]\s*`)
+
+// sanitizeTaskForRemote 在不修改本地任务结构的前提下，清洗远程展示文本中的 Markdown 装饰。
+func sanitizeTaskForRemote(task model.Task) model.Task {
+	task.Title = sanitizeMarkdownText(task.Title)
+	task.Description = sanitizeMarkdownText(task.Description)
+	return task
+}
+
+// sanitizeMarkdownText 去掉常见 Markdown 装饰（如 [ ]、**），避免远程任务出现原始标记。
+func sanitizeMarkdownText(text string) string {
+	out := strings.TrimSpace(text)
+	if out == "" {
+		return out
+	}
+	out = markdownCheckboxPrefixPattern.ReplaceAllString(out, "")
+	out = strings.ReplaceAll(out, "**", "")
+	out = strings.ReplaceAll(out, "__", "")
+	out = strings.Join(strings.Fields(out), " ")
+	return out
+}
+
+func parseMicrosoftStepID(sourceRawID string) string {
+	raw := strings.TrimSpace(sourceRawID)
+	if !strings.HasPrefix(raw, "ms_step:") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(raw, "ms_step:"))
+}
+
+func buildMicrosoftStepLocalID(parentRemoteID, stepID string) string {
+	parent := strings.TrimSpace(parentRemoteID)
+	step := strings.TrimSpace(stepID)
+	if parent == "" || step == "" {
+		return ""
+	}
+	return fmt.Sprintf("ms-step-%s-%s", parent, step)
 }
 
 // deleteRemoteTasks 删除远程多余任务
@@ -1503,7 +1888,7 @@ func (s *Server) handleGetServerInfo(ctx context.Context, req *mcp.CallToolReque
 		Capabilities: map[string][]string{
 			"task_management":    {"list_tasks", "list_task_lists", "create_task", "update_task", "delete_task", "complete_task"},
 			"analysis":           {"analyze_quadrant", "analyze_priority"},
-			"project_management": {"create_project", "list_projects", "split_project", "confirm_project", "sync_project"},
+			"project_management": {"create_project", "list_projects", "split_project", "split_project_from_markdown", "confirm_project", "sync_project"},
 			"sync":               {"sync_pull", "sync_push"},
 			"provider":           {"list_providers", "get_provider_info", "get_provider_config_template"},
 			"prompt":             {"get_prompt"},
@@ -1788,8 +2173,8 @@ func (s *Server) handleGetProviderConfigTemplate(ctx context.Context, req *mcp.C
 			"description": "TickTick 使用 API Token 认证",
 			"auth_type":   "API Token",
 			"steps": []string{
-				"1. 登录 TickTick Web 端",
-				"2. 打开开发者工具，复制请求中的 t token",
+				"1. 登录 TickTick 开发者平台",
+				"2. 创建或查看个人 API Token",
 			},
 			"required_fields": []string{"api_token"},
 			"optional_fields": []string{},
@@ -1801,8 +2186,8 @@ func (s *Server) handleGetProviderConfigTemplate(ctx context.Context, req *mcp.C
 			"description": "Dida365 使用 API Token 认证",
 			"auth_type":   "API Token",
 			"steps": []string{
-				"1. 登录 dida365.com",
-				"2. 打开开发者工具，复制请求中的 t token",
+				"1. 登录 Dida365 开发者平台",
+				"2. 创建或查看个人 API Token",
 			},
 			"required_fields": []string{"api_token"},
 			"optional_fields": []string{},
