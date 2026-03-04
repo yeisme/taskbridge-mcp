@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/pkg/paths"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 	"github.com/yeisme/taskbridge/pkg/ui"
 )
 
@@ -200,25 +202,30 @@ func loginGoogle() {
 	tokenPath := paths.GetTokenPath("google")
 	client.SetTokenFile(tokenPath)
 
-	// 生成授权 URL
-	state := fmt.Sprintf("taskbridge-%d", time.Now().Unix())
-	authURL := client.GetAuthURL(state)
-
-	fmt.Println("\n📋 请在浏览器中打开以下链接进行授权:")
-	fmt.Println()
-	fmt.Printf("   %s\n", authURL)
-	fmt.Println()
-
 	if manualAuth {
-		// 手动输入授权码模式
-		fmt.Print("请输入授权码: ")
+		// 生成授权 URL
+		state := fmt.Sprintf("taskbridge-%d", time.Now().Unix())
+		authURL := client.GetAuthURL(state)
+
+		fmt.Println("\n📋 请在浏览器中打开以下链接进行授权:")
+		fmt.Println()
+		fmt.Printf("   %s\n", authURL)
+		fmt.Println()
+
+		// 手动输入授权码模式（支持直接粘贴回调 URL）
+		fmt.Print("请输入授权码（或粘贴完整回调 URL）: ")
 		reader := bufio.NewReader(os.Stdin)
-		code, err := reader.ReadString('\n')
+		input, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Printf("❌ 读取授权码失败: %v\n", err)
 			os.Exit(1)
 		}
-		code = strings.TrimSpace(code)
+		code, err := extractGoogleAuthCode(input)
+		if err != nil {
+			fmt.Printf("❌ 授权码格式错误: %v\n", err)
+			fmt.Println("请复制浏览器回调地址里 `code=` 后面的完整值，或直接粘贴完整回调 URL。")
+			os.Exit(1)
+		}
 
 		// 交换 token
 		token, err := client.Exchange(context.Background(), code)
@@ -236,11 +243,77 @@ func loginGoogle() {
 		fmt.Println("\n✅ Google Tasks 认证成功!")
 		fmt.Printf("📁 Token 已保存到: %s\n", tokenPath)
 	} else {
-		// 自动模式（需要实现本地服务器回调）
-		fmt.Println("⚠️ 自动模式尚未实现，请使用 --manual 参数")
-		fmt.Println("   taskbridge auth login google --manual")
-		os.Exit(1)
+		// 自动模式：本地启动回调服务完成认证
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		token, err := client.StartAuthServer(ctx, 0)
+		if err != nil {
+			fmt.Printf("❌ 自动认证失败: %v\n", err)
+			fmt.Println("可改用手动模式: taskbridge auth login google --manual")
+			fmt.Println("若你使用 Google Desktop 凭证且 redirect_uri 为 http://localhost，请确保本机 80 端口可监听。")
+			os.Exit(1)
+		}
+
+		fmt.Println("\n✅ Google Tasks 自动认证成功!")
+		fmt.Printf("📁 Token 已保存到: %s\n", tokenPath)
+		if !token.Expiry.IsZero() {
+			fmt.Printf("⏰ 过期时间: %s\n", token.Expiry.Format("2006-01-02 15:04:05"))
+		}
 	}
+}
+
+func extractGoogleAuthCode(input string) (string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", fmt.Errorf("输入为空")
+	}
+
+	// 支持直接粘贴完整回调 URL。
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		parsedURL, err := url.Parse(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("无法解析 URL: %w", err)
+		}
+		code := strings.TrimSpace(parsedURL.Query().Get("code"))
+		if code == "" {
+			return "", fmt.Errorf("URL 中未找到 code 参数")
+		}
+		return code, nil
+	}
+
+	// 支持粘贴 query 字符串（例如 code=xxx&scope=...）。
+	if strings.Contains(trimmed, "code=") {
+		query := trimmed
+		if idx := strings.Index(trimmed, "?"); idx >= 0 && idx < len(trimmed)-1 {
+			query = trimmed[idx+1:]
+		}
+		values, err := url.ParseQuery(query)
+		if err == nil {
+			code := strings.TrimSpace(values.Get("code"))
+			if code != "" {
+				return code, nil
+			}
+		}
+	}
+
+	if strings.HasPrefix(trimmed, "taskbridge-") || looksLikeNumericState(trimmed) {
+		return "", fmt.Errorf("看起来输入的是 state，不是授权 code")
+	}
+
+	return trimmed, nil
+}
+
+func looksLikeNumericState(v string) bool {
+	if len(v) < 8 || len(v) > 16 {
+		return false
+	}
+	for _, ch := range v {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // runAuthLogout 执行登出
@@ -255,12 +328,17 @@ func runAuthLogout(cmd *cobra.Command, args []string) {
 	}
 
 	tokenPath := paths.GetTokenPath(providerName)
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, providerName)
+	if err != nil {
+		fmt.Printf("❌ 读取 token 失败: %v\n", err)
+		os.Exit(1)
+	}
+	if !hasToken {
 		fmt.Printf("ℹ️ %s 未登录\n", providerName)
 		return
 	}
 
-	if err := os.Remove(tokenPath); err != nil {
+	if err := tokenstore.Delete(tokenPath, providerName); err != nil {
 		fmt.Printf("❌ 登出失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -627,7 +705,12 @@ func refreshTickStyleProvider(providerName string) {
 		displayName = "Dida365"
 	}
 	tokenPath := paths.GetTokenPath(providerName)
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, providerName)
+	if err != nil {
+		fmt.Printf("❌ 读取 %s token 失败: %v\n", displayName, err)
+		os.Exit(1)
+	}
+	if !hasToken {
 		fmt.Printf("❌ %s 凭证不存在，请先执行: taskbridge auth login %s\n", displayName, providerName)
 		os.Exit(1)
 	}
@@ -774,7 +857,14 @@ func getProviderAuthSnapshot(providerName string) AuthSnapshot {
 		NextAction:    fmt.Sprintf("taskbridge auth login %s", meta.Name),
 	}
 
-	if _, err := os.Stat(snapshot.TokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(snapshot.TokenPath, meta.Name)
+	if err != nil {
+		snapshot.StatusText = "⚠️ Token error"
+		snapshot.ExpiresAt = "读取失败"
+		snapshot.NextAction = fmt.Sprintf("检查 token 文件: %s", snapshot.TokenPath)
+		return snapshot
+	}
+	if !hasToken {
 		if isProviderEnabled(meta.Name) {
 			snapshot.StatusText = "❌ Not authenticated"
 		}

@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yeisme/taskbridge/pkg/paths"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -81,6 +85,169 @@ func (c *OAuth2Client) Exchange(ctx context.Context, code string) (*oauth2.Token
 	return token, nil
 }
 
+// StartAuthServer 启动本地回调服务完成 OAuth2 认证。
+// port > 0 时使用固定端口；否则优先使用配置中的端口，没有则自动分配可用端口。
+func (c *OAuth2Client) StartAuthServer(ctx context.Context, port int) (*oauth2.Token, error) {
+	if c.config == nil {
+		return nil, fmt.Errorf("oauth config not initialized")
+	}
+
+	redirectURL, err := url.Parse(strings.TrimSpace(c.config.RedirectURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid redirect URL: %w", err)
+	}
+	if redirectURL.Scheme == "" {
+		redirectURL.Scheme = "http"
+	}
+
+	host := redirectURL.Hostname()
+	if host == "" {
+		host = "localhost"
+	}
+	originalPort := strings.TrimSpace(redirectURL.Port())
+	hasExplicitPort := originalPort != ""
+	originalPath := strings.TrimSpace(redirectURL.Path)
+	callbackPath := originalPath
+	if callbackPath == "" {
+		// net/http 回调 path 至少会是 "/"，用于路由匹配。
+		callbackPath = "/"
+	}
+
+	listenPort := port
+	if listenPort <= 0 {
+		if hasExplicitPort {
+			if p, convErr := strconv.Atoi(originalPort); convErr == nil && p > 0 {
+				listenPort = p
+			}
+		}
+	}
+	if listenPort <= 0 {
+		// 若 redirect_uri 未显式端口（如 http://localhost），为保证与注册值一致，固定监听 80 端口。
+		listenPort = 80
+	}
+
+	listenAddr := net.JoinHostPort(host, strconv.Itoa(listenPort))
+
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		if !hasExplicitPort && port <= 0 {
+			return nil, fmt.Errorf("failed to start callback listener on %s: %w (current redirect_uri has no port; use --manual or set redirect_uri with explicit port)", listenAddr, err)
+		}
+		return nil, fmt.Errorf("failed to start callback listener on %s: %w", listenAddr, err)
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	actualPort := ""
+	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
+		actualPort = strconv.Itoa(tcpAddr.Port)
+	} else {
+		_, p, splitErr := net.SplitHostPort(listener.Addr().String())
+		if splitErr == nil {
+			actualPort = p
+		}
+	}
+	if actualPort == "" {
+		return nil, fmt.Errorf("failed to resolve callback listener port")
+	}
+
+	if hasExplicitPort || port > 0 {
+		redirectURL.Host = net.JoinHostPort(host, actualPort)
+	} else {
+		// 保持原始 redirect_uri 的 host 形式（无端口），避免 Google 端 redirect_uri_mismatch。
+		redirectURL.Host = host
+	}
+	// 保持 redirect_uri 的 path 与配置文件一致，避免 redirect_uri_mismatch。
+	redirectURL.Path = originalPath
+	c.config.RedirectURL = redirectURL.String()
+
+	state := fmt.Sprintf("taskbridge-%d", time.Now().UnixNano())
+	authURL := c.GetAuthURL(state)
+
+	fmt.Println()
+	fmt.Println("请在浏览器中打开以下链接进行授权:")
+	fmt.Println()
+	fmt.Println(authURL)
+	fmt.Println()
+	fmt.Println("等待授权回调...")
+
+	resultChan := make(chan *oauth2.Token, 1)
+	errChan := make(chan error, 1)
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != callbackPath {
+				http.NotFound(w, r)
+				return
+			}
+
+			if errParam := strings.TrimSpace(r.URL.Query().Get("error")); errParam != "" {
+				errDesc := strings.TrimSpace(r.URL.Query().Get("error_description"))
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprintf(w, "授权失败: %s - %s", errParam, errDesc)
+				errChan <- fmt.Errorf("%s: %s", errParam, errDesc)
+				return
+			}
+
+			gotState := strings.TrimSpace(r.URL.Query().Get("state"))
+			if gotState == "" || gotState != state {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprint(w, "授权失败: state 不匹配")
+				errChan <- fmt.Errorf("state mismatch")
+				return
+			}
+
+			code := strings.TrimSpace(r.URL.Query().Get("code"))
+			if code == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprint(w, "授权失败: 未收到授权码")
+				errChan <- fmt.Errorf("no authorization code in callback")
+				return
+			}
+
+			token, exchangeErr := c.Exchange(ctx, code)
+			if exchangeErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(w, "授权失败: %v", exchangeErr)
+				errChan <- exchangeErr
+				return
+			}
+
+			if saveErr := c.SaveToken(token); saveErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(w, "授权成功，但保存 token 失败: %v", saveErr)
+				errChan <- saveErr
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><head><title>授权成功</title></head><body><h2>授权成功</h2><p>请返回终端继续。</p></body></html>`)
+			resultChan <- token
+		}),
+	}
+
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+			errChan <- serveErr
+		}
+	}()
+
+	select {
+	case token := <-resultChan:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+		return token, nil
+	case authErr := <-errChan:
+		_ = server.Shutdown(ctx)
+		return nil, authErr
+	case <-ctx.Done():
+		_ = server.Shutdown(ctx)
+		return nil, ctx.Err()
+	}
+}
+
 // SetToken 设置 token
 func (c *OAuth2Client) SetToken(token *oauth2.Token) {
 	c.token = token
@@ -97,14 +264,9 @@ func (c *OAuth2Client) LoadToken() (*oauth2.Token, error) {
 		return nil, fmt.Errorf("token file not specified")
 	}
 
-	data, err := os.ReadFile(c.tokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read token file: %w", err)
-	}
-
 	var token oauth2.Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
+	if err := tokenstore.Load(c.tokenFile, "google", &token); err != nil {
+		return nil, fmt.Errorf("failed to load token: %w", err)
 	}
 
 	c.token = &token
@@ -121,20 +283,8 @@ func (c *OAuth2Client) SaveToken(token *oauth2.Token) error {
 	if c.tokenFile == "" {
 		return fmt.Errorf("token file not specified")
 	}
-
-	// 确保目录存在
-	dir := filepath.Dir(c.tokenFile)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create token directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(token, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal token: %w", err)
-	}
-
-	if err := os.WriteFile(c.tokenFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write token file: %w", err)
+	if err := tokenstore.Save(c.tokenFile, "google", token); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
 	}
 
 	c.token = token
@@ -327,7 +477,7 @@ func maskToken(token string) string {
 
 // NewOAuth2ClientFromHome 从 HOME 目录加载凭证创建 OAuth2 客户端
 // 凭证文件路径: ~/.taskbridge/credentials/google_credentials.json
-// Token 文件路径: ~/.taskbridge/credentials/google_token.json
+// Token 文件路径: ~/.taskbridge/credentials/tokens.json
 func NewOAuth2ClientFromHome() (*OAuth2Client, error) {
 	// 确保凭证目录存在
 	if err := paths.EnsureCredentialsDir(); err != nil {
@@ -362,7 +512,7 @@ func GetCredentialsPath() string {
 	return paths.GetCredentialsPath("google")
 }
 
-// GetTokenPath 获取 Google Token 文件路径
+// GetTokenPath 获取 token 存储文件路径（统一单文件）
 func GetTokenPath() string {
 	return paths.GetTokenPath("google")
 }
