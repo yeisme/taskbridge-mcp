@@ -12,6 +12,8 @@ const (
 	AppName = "taskbridge"
 	// CredentialsDir 凭证目录名称
 	CredentialsDir = "credentials"
+	// TokenFileName 统一 token 存储文件名
+	TokenFileName = "tokens.json"
 )
 
 // GetHomeDir 获取用户 HOME 目录
@@ -37,9 +39,15 @@ func GetCredentialsDir() string {
 	return filepath.Join(GetAppDir(), CredentialsDir)
 }
 
-// GetTokenPath 获取指定 Provider 的 token 文件路径
-// 例如: ~/.taskbridge/credentials/google_token.json
+// GetTokenPath 获取 token 存储文件路径（统一单文件）
+// 例如: ~/.taskbridge/credentials/tokens.json
 func GetTokenPath(provider string) string {
+	return filepath.Join(GetCredentialsDir(), TokenFileName)
+}
+
+// GetLegacyTokenPath 获取历史版本 provider 独立 token 文件路径
+// 例如: ~/.taskbridge/credentials/google_token.json
+func GetLegacyTokenPath(provider string) string {
 	return filepath.Join(GetCredentialsDir(), provider+"_token.json")
 }
 

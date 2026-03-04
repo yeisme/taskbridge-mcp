@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +20,7 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkauthenv1 "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
 	"github.com/rs/zerolog/log"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 	"golang.org/x/oauth2"
 )
 
@@ -489,14 +489,9 @@ func (c *OAuth2Client) LoadToken() error {
 		return fmt.Errorf("token file not specified")
 	}
 
-	data, err := os.ReadFile(c.tokenFile)
-	if err != nil {
-		return fmt.Errorf("failed to read token file: %w", err)
-	}
-
 	var token TokenResponse
-	if err := json.Unmarshal(data, &token); err != nil {
-		return fmt.Errorf("failed to parse token: %w", err)
+	if err := tokenstore.Load(c.tokenFile, "feishu", &token); err != nil {
+		return fmt.Errorf("failed to load token: %w", err)
 	}
 
 	c.mu.Lock()
@@ -520,19 +515,8 @@ func (c *OAuth2Client) SaveToken() error {
 		return fmt.Errorf("no token to save")
 	}
 
-	// 确保目录存在
-	dir := filepath.Dir(c.tokenFile)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create token directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(token, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal token: %w", err)
-	}
-
-	if err := os.WriteFile(c.tokenFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write token file: %w", err)
+	if err := tokenstore.Save(c.tokenFile, "feishu", token); err != nil {
+		return fmt.Errorf("failed to save token: %w", err)
 	}
 
 	return nil
@@ -583,8 +567,8 @@ func (c *OAuth2Client) RevokeToken() error {
 	c.mu.Unlock()
 
 	if c.tokenFile != "" {
-		if err := os.Remove(c.tokenFile); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove token file: %w", err)
+		if err := tokenstore.Delete(c.tokenFile, "feishu"); err != nil {
+			return fmt.Errorf("failed to remove token: %w", err)
 		}
 	}
 

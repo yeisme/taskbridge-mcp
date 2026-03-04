@@ -5,14 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yeisme/taskbridge/internal/model"
 	"github.com/yeisme/taskbridge/internal/provider"
 	"github.com/yeisme/taskbridge/pkg/paths"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 )
 
 type Provider struct {
@@ -67,7 +66,7 @@ func NewProvider(cfg Config) (*Provider, error) {
 		},
 	}
 	if cfg.TokenFile != "" {
-		if s, err := loadTokenStore(cfg.TokenFile); err == nil {
+		if s, err := loadTokenStore(cfg.TokenFile, name); err == nil {
 			if strings.TrimSpace(cfg.Username) == "" {
 				cfg.Username = s.Username
 			}
@@ -93,7 +92,11 @@ func NewProviderFromHome() (*Provider, error) {
 func NewProviderFromHomeByName(providerName string) (*Provider, error) {
 	resolvedName := normalizeProviderName(providerName)
 	tokenPath := paths.GetTokenPath(resolvedName)
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, resolvedName)
+	if err != nil {
+		return nil, err
+	}
+	if !hasToken {
 		return nil, fmt.Errorf("token file not found at %s", tokenPath)
 	}
 	return NewProvider(Config{
@@ -151,7 +154,7 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 		}
 		if authErr == nil {
 			if p.config.TokenFile != "" {
-				_ = saveTokenStore(p.config.TokenFile, &tokenStore{
+				_ = saveTokenStore(p.config.TokenFile, p.name, &tokenStore{
 					Username: p.config.Username,
 					Password: p.config.Password,
 					Token:    p.client.Token(),
@@ -171,7 +174,7 @@ func (p *Provider) Authenticate(ctx context.Context, config map[string]interface
 
 	p.config.Token = p.client.Token()
 	if p.config.TokenFile != "" {
-		_ = saveTokenStore(p.config.TokenFile, &tokenStore{
+		_ = saveTokenStore(p.config.TokenFile, p.name, &tokenStore{
 			Username: p.config.Username,
 			Password: p.config.Password,
 			Token:    p.client.Token(),
@@ -205,7 +208,7 @@ func (p *Provider) RefreshToken(ctx context.Context) error {
 	}
 	p.config.Token = p.client.Token()
 	if p.config.TokenFile != "" {
-		_ = saveTokenStore(p.config.TokenFile, &tokenStore{
+		_ = saveTokenStore(p.config.TokenFile, p.name, &tokenStore{
 			Username: p.config.Username,
 			Password: p.config.Password,
 			Token:    p.client.Token(),
@@ -806,23 +809,19 @@ func toTickTickPriority(p model.Priority) int {
 	}
 }
 
-func saveTokenStore(path string, store *tokenStore) error {
+func saveTokenStore(path, providerName string, store *tokenStore) error {
 	if store == nil {
 		return nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(store, "", "  ")
+	data, err := json.Marshal(store)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return tokenstore.SaveRaw(path, normalizeProviderName(providerName), data)
 }
 
-func loadTokenStore(path string) (*tokenStore, error) {
-	data, err := os.ReadFile(path)
+func loadTokenStore(path, providerName string) (*tokenStore, error) {
+	data, err := tokenstore.LoadRaw(path, normalizeProviderName(providerName))
 	if err != nil {
 		return nil, err
 	}

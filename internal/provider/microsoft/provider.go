@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -752,7 +751,7 @@ func (p *Provider) SetEnvAuth() error {
 
 // NewProviderFromHome 从 HOME 目录加载凭证创建 Provider
 // 凭证文件路径: ~/.taskbridge/credentials/microsoft_credentials.json
-// Token 文件路径: ~/.taskbridge/credentials/microsoft_token.json
+// Token 文件路径: ~/.taskbridge/credentials/tokens.json
 func NewProviderFromHome() (*Provider, error) {
 	credentialsDir := paths.GetCredentialsDir()
 
@@ -762,7 +761,7 @@ func NewProviderFromHome() (*Provider, error) {
 	}
 
 	// 获取凭证文件路径
-	credentialsPath := filepath.Join(credentialsDir, "microsoft_credentials.json")
+	credentialsPath := paths.GetCredentialsPath("microsoft")
 
 	// 检查凭证文件是否存在
 	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
@@ -770,7 +769,7 @@ func NewProviderFromHome() (*Provider, error) {
 	}
 
 	// 获取 Token 文件路径
-	tokenPath := filepath.Join(credentialsDir, "microsoft_token.json")
+	tokenPath := paths.GetTokenPath("microsoft")
 
 	// 创建 Provider
 	p, err := NewProvider(Config{

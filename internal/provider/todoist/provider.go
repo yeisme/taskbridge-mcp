@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yeisme/taskbridge/internal/model"
 	"github.com/yeisme/taskbridge/internal/provider"
 	"github.com/yeisme/taskbridge/pkg/paths"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 )
 
 // Provider Todoist Provider。
@@ -63,7 +62,11 @@ func NewProvider(cfg Config) (*Provider, error) {
 // NewProviderFromHome 从 HOME 目录加载凭证创建 Provider。
 func NewProviderFromHome() (*Provider, error) {
 	tokenPath := paths.GetTokenPath("todoist")
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, "todoist")
+	if err != nil {
+		return nil, err
+	}
+	if !hasToken {
 		return nil, fmt.Errorf("token file not found at %s", tokenPath)
 	}
 
@@ -313,7 +316,7 @@ func (p *Provider) listSectionNames(ctx context.Context, listID string) (map[str
 }
 
 func loadAPITokenFromFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := tokenstore.LoadRaw(path, "todoist")
 	if err != nil {
 		return "", err
 	}
@@ -332,10 +335,6 @@ func loadAPITokenFromFile(path string) (string, error) {
 }
 
 func saveAPITokenToFile(path, token string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-
 	payload := TokenFile{
 		APIToken:  token,
 		Provider:  "todoist",
@@ -345,5 +344,5 @@ func saveAPITokenToFile(path, token string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return tokenstore.SaveRaw(path, "todoist", data)
 }

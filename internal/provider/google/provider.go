@@ -515,7 +515,7 @@ func (p *Provider) CompleteAuth(ctx context.Context, code string) error {
 
 // NewProviderFromHome 从 HOME 目录加载凭证创建 Provider
 // 凭证文件路径: ~/.taskbridge/credentials/google_credentials.json
-// Token 文件路径: ~/.taskbridge/credentials/google_token.json
+// Token 文件路径: ~/.taskbridge/credentials/tokens.json
 func NewProviderFromHome() (*Provider, error) {
 	// 确保凭证目录存在
 	if err := EnsureCredentialsDir(); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/yeisme/taskbridge/internal/provider/ticktick"
 	"github.com/yeisme/taskbridge/internal/provider/todoist"
 	"github.com/yeisme/taskbridge/pkg/paths"
+	"github.com/yeisme/taskbridge/pkg/tokenstore"
 )
 
 // serveCmd 后台服务命令
@@ -260,7 +261,11 @@ func createMicrosoftProvider() (*microsoft.Provider, error) {
 // createTodoistProvider 创建 Todoist Provider
 func createTodoistProvider() (*todoist.Provider, error) {
 	tokenPath := paths.GetTokenPath("todoist")
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, "todoist")
+	if err != nil {
+		return nil, err
+	}
+	if !hasToken {
 		return nil, fmt.Errorf("token 文件不存在")
 	}
 
@@ -299,7 +304,11 @@ func createFeishuProvider() (*feishu.Provider, error) {
 // createTickTickProvider 创建 TickTick Provider
 func createTickTickProvider() (*ticktick.Provider, error) {
 	tokenPath := paths.GetTokenPath("ticktick")
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, "ticktick")
+	if err != nil {
+		return nil, err
+	}
+	if !hasToken {
 		return nil, fmt.Errorf("token 文件不存在")
 	}
 
@@ -319,7 +328,11 @@ func createTickTickProvider() (*ticktick.Provider, error) {
 // createDidaProvider 创建 Dida Provider
 func createDidaProvider() (*ticktick.Provider, error) {
 	tokenPath := paths.GetTokenPath("dida")
-	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+	hasToken, err := tokenstore.Has(tokenPath, "dida")
+	if err != nil {
+		return nil, err
+	}
+	if !hasToken {
 		return nil, fmt.Errorf("token 文件不存在")
 	}
 
