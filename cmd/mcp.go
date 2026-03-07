@@ -61,6 +61,7 @@ TaskBridge 作为 MCP 服务器，提供以下功能:
   start   启动 MCP 服务
   status  查看服务状态
   tools   列出可用的 MCP 工具
+  doctor  诊断配置与运行风险
 
 示例:
   taskbridge mcp start
@@ -100,11 +101,20 @@ var mcpToolsCmd = &cobra.Command{
 	Run:   runMCPTools,
 }
 
+// mcpDoctorCmd MCP 配置诊断
+var mcpDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "诊断 MCP 配置与运行风险",
+	Long:  `诊断 MCP 配置、端口占用与 Provider 凭证就绪情况`,
+	Run:   runMCPDoctor,
+}
+
 func init() {
 	rootCmd.AddCommand(mcpCmd)
 	mcpCmd.AddCommand(mcpStartCmd)
 	mcpCmd.AddCommand(mcpStatusCmd)
 	mcpCmd.AddCommand(mcpToolsCmd)
+	mcpCmd.AddCommand(mcpDoctorCmd)
 
 	mcpStartCmd.Flags().StringVar(&mcpTransport, "transport", "stdio", "传输方式 (stdio, sse, streamable)")
 	mcpStartCmd.Flags().IntVarP(&mcpPort, "port", "p", 14940, "HTTP 端口（用于 sse/streamable 模式）")
@@ -524,6 +534,128 @@ func getMCPTools() []MCPTool {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			Name:        "analyze_overdue_health",
+			Description: "分析逾期任务健康度，输出过载风险与建议动作",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"source": map[string]interface{}{
+						"type":        "string",
+						"description": "按来源筛选（支持简写）",
+					},
+					"list_id": map[string]interface{}{
+						"description": "按清单 ID 筛选（string 或 string[]）",
+					},
+					"include_suggestions": map[string]interface{}{
+						"type":        "boolean",
+						"description": "是否返回建议动作与提问",
+					},
+				},
+			},
+		},
+		{
+			Name:        "resolve_overdue_tasks",
+			Description: "批量处理逾期任务（defer/reschedule/delete/split_then_schedule）",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"actions": map[string]interface{}{
+						"type":        "array",
+						"description": "处理动作列表",
+					},
+					"dry_run": map[string]interface{}{
+						"type":        "boolean",
+						"description": "模拟执行",
+					},
+					"confirm_token": map[string]interface{}{
+						"type":        "string",
+						"description": "删除确认 token（confirm-delete）",
+					},
+				},
+				"required": []string{"actions"},
+			},
+		},
+		{
+			Name:        "rebalance_longterm_tasks",
+			Description: "根据短期任务负载自动调配长期无排期任务",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"source": map[string]interface{}{
+						"type":        "string",
+						"description": "按来源筛选（支持简写）",
+					},
+					"list_id": map[string]interface{}{
+						"description": "按清单 ID 筛选（string 或 string[]）",
+					},
+					"dry_run": map[string]interface{}{
+						"type":        "boolean",
+						"description": "模拟执行",
+					},
+				},
+			},
+		},
+		{
+			Name:        "detect_decomposition_candidates",
+			Description: "识别复杂/抽象且缺少子任务的候选任务",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"source": map[string]interface{}{
+						"type":        "string",
+						"description": "按来源筛选（支持简写）",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "返回条数（默认 20）",
+					},
+				},
+			},
+		},
+		{
+			Name:        "decompose_task_with_provider",
+			Description: "基于 provider 能力拆分任务（可选落地写入）",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "待拆分任务 ID",
+					},
+					"provider": map[string]interface{}{
+						"type":        "string",
+						"description": "目标 provider（支持简写）",
+					},
+					"strategy": map[string]interface{}{
+						"type":        "string",
+						"description": "策略（project_split/markdown_split）",
+					},
+					"write_tasks": map[string]interface{}{
+						"type":        "boolean",
+						"description": "是否落地写入",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "analyze_achievement",
+			Description: "分析完成情况并输出成就反馈",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"window_days": map[string]interface{}{
+						"type":        "integer",
+						"description": "统计窗口（默认 30）",
+					},
+					"compare_previous": map[string]interface{}{
+						"type":        "boolean",
+						"description": "是否对比上一周期",
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -533,28 +665,31 @@ func printToStderr(message string) {
 }
 
 func runMCPStart(cmd *cobra.Command, args []string) {
-	// 验证传输方式
-	validTransports := map[string]bool{"stdio": true, "sse": true, "streamable": true}
-	if !validTransports[mcpTransport] {
+	transport, warnings, err := resolveMCPStartTransport(cmd)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ 不支持的传输方式: %s\n", mcpTransport)
 		fmt.Fprintf(os.Stderr, "支持的传输方式: stdio, sse, streamable\n")
 		os.Exit(1)
 	}
+	port := resolveMCPStartPort(cmd)
 
 	// 在 stdio 模式下，所有日志信息必须输出到 stderr，因为 stdout 用于 JSON-RPC 通信
 	// 在 sse/streamable 模式下，也输出到 stderr 避免干扰 HTTP 服务
+	for _, warning := range warnings {
+		printToStderr(fmt.Sprintf("⚠️ %s\n", warning))
+	}
 	printToStderr(titleStyle.Render("🚀 启动 TaskBridge MCP 服务"))
 	printToStderr("\n")
-	printToStderr(statusBarStyle.Render(fmt.Sprintf("传输方式: %s", mcpTransport)))
+	printToStderr(statusBarStyle.Render(fmt.Sprintf("传输方式: %s", transport)))
 	printToStderr("\n")
-	if mcpTransport == "sse" || mcpTransport == "streamable" {
-		printToStderr(statusBarStyle.Render(fmt.Sprintf("端口: %d", mcpPort)))
+	if transport == "sse" || transport == "streamable" {
+		printToStderr(statusBarStyle.Render(fmt.Sprintf("端口: %d", port)))
 		printToStderr("\n")
-		if mcpTransport == "sse" {
-			printToStderr(statusBarStyle.Render(fmt.Sprintf("SSE 端点: http://localhost:%d/sse", mcpPort)))
+		if transport == "sse" {
+			printToStderr(statusBarStyle.Render(fmt.Sprintf("SSE 端点: http://localhost:%d/sse", port)))
 			printToStderr("\n")
 		} else {
-			printToStderr(statusBarStyle.Render(fmt.Sprintf("HTTP 端点: http://localhost:%d/mcp", mcpPort)))
+			printToStderr(statusBarStyle.Render(fmt.Sprintf("HTTP 端点: http://localhost:%d/mcp", port)))
 			printToStderr("\n")
 		}
 	}
@@ -638,11 +773,12 @@ func runMCPStart(cmd *cobra.Command, args []string) {
 		taskbridgeMCP.WithConfig(&taskbridgeMCP.ServerConfig{
 			Name:      "taskbridge",
 			Version:   buildinfo.Version,
-			Transport: mcpTransport,
-			Port:      mcpPort,
+			Transport: transport,
+			Port:      port,
 		}),
 		taskbridgeMCP.WithProviders(providers),
 		taskbridgeMCP.WithProviderConfig(&cfg.Providers),
+		taskbridgeMCP.WithIntelligenceConfig(&cfg.MCP.Intelligence),
 	)
 
 	// 显示启动信息（输出到 stderr）
@@ -688,9 +824,19 @@ func runMCPStatus(cmd *cobra.Command, args []string) {
 		fmt.Println("   状态: ❌ 未启用")
 	}
 
-	fmt.Printf("   传输方式: %s\n", cfg.MCP.Transport)
-	if cfg.MCP.Transport == "sse" || cfg.MCP.Transport == "streamable" || cfg.MCP.Transport == "tcp" {
+	transport, warnings, err := resolveTransportForDisplay(cfg.MCP.Transport)
+	if err != nil {
+		transport = cfg.MCP.Transport
+	}
+	fmt.Printf("   传输方式: %s\n", transport)
+	for _, warning := range warnings {
+		fmt.Printf("   警告: %s\n", warning)
+	}
+	if transport == "sse" || transport == "streamable" {
 		fmt.Printf("   端口: %d\n", cfg.MCP.Port)
+	}
+	if err != nil {
+		fmt.Printf("   错误: %v\n", err)
 	}
 
 	fmt.Println()
@@ -722,4 +868,29 @@ func runMCPTools(cmd *cobra.Command, args []string) {
 		}
 		fmt.Println()
 	}
+}
+
+func runMCPDoctor(cmd *cobra.Command, args []string) {
+	_ = cmd
+	_ = args
+
+	exitCode := writeDoctorReport(os.Stdout, buildDoctorReport(cfg))
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func resolveMCPStartTransport(cmd *cobra.Command) (string, []string, error) {
+	raw := cfg.MCP.Transport
+	if cmd.Flags().Changed("transport") {
+		raw = mcpTransport
+	}
+	return resolveTransportForDisplay(raw)
+}
+
+func resolveMCPStartPort(cmd *cobra.Command) int {
+	if cmd.Flags().Changed("port") {
+		return mcpPort
+	}
+	return cfg.MCP.Port
 }

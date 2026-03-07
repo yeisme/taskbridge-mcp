@@ -254,44 +254,11 @@ func runConfigInit(cmd *cobra.Command, args []string) {
 }
 
 func runConfigValidate(cmd *cobra.Command, args []string) {
-	errors := []string{}
+	_ = cmd
+	_ = args
 
-	// 验证存储配置
-	if cfg.Storage.Type == "" {
-		errors = append(errors, "storage.type 不能为空")
+	exitCode := writeValidationReport(os.Stdout, cfg.Validate())
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
-	if cfg.Storage.Path == "" && cfg.Storage.Type == "file" {
-		errors = append(errors, "storage.path 不能为空（文件存储模式）")
-	}
-
-	// 验证同步配置
-	if cfg.Sync.Mode == "" {
-		errors = append(errors, "sync.mode 不能为空")
-	}
-	validModes := map[string]bool{"once": true, "interval": true, "realtime": true}
-	if !validModes[cfg.Sync.Mode] {
-		errors = append(errors, fmt.Sprintf("无效的 sync.mode: %s", cfg.Sync.Mode))
-	}
-
-	// 验证 MCP 配置
-	if cfg.MCP.Enabled {
-		if cfg.MCP.Transport == "" {
-			errors = append(errors, "mcp.transport 不能为空（MCP 启用时）")
-		}
-		validTransports := map[string]bool{"stdio": true, "tcp": true}
-		if !validTransports[cfg.MCP.Transport] {
-			errors = append(errors, fmt.Sprintf("无效的 mcp.transport: %s", cfg.MCP.Transport))
-		}
-	}
-
-	// 输出结果
-	if len(errors) > 0 {
-		fmt.Println("❌ 配置验证失败:")
-		for _, e := range errors {
-			fmt.Printf("  - %s\n", e)
-		}
-		os.Exit(1)
-	}
-
-	fmt.Println("✅ 配置验证通过")
 }

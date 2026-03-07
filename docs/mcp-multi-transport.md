@@ -4,6 +4,8 @@
 
 当前 TaskBridge MCP 服务只支持 stdio 传输方式，用户希望支持更多传输方式以便于不同场景使用。
 
+> 更新：当前实现已支持 `stdio`、`sse`、`streamable`。历史配置值 `tcp` 已废弃，但仍会兼容映射到 `sse`。
+
 ## MCP 传输方式
 
 根据 MCP 规范和 go-sdk 支持，有以下传输方式：
@@ -114,6 +116,14 @@ taskbridge mcp start --transport stdio
 ```bash
 taskbridge mcp start --transport sse --port 8080
 ```
+
+### 兼容说明
+
+- 正式术语统一为 `stdio` / `sse` / `streamable`
+- 若旧配置中仍使用 `transport: tcp`：
+  - 启动时会映射为 `sse`
+  - `config validate` 与 `mcp doctor` 会输出废弃警告
+  - 不再保留独立 TCP 服务器实现
 
 ## 实施步骤
 

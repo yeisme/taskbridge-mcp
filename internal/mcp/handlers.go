@@ -1887,7 +1887,8 @@ func (s *Server) handleGetServerInfo(ctx context.Context, req *mcp.CallToolReque
 		Transport: s.config.Transport,
 		Capabilities: map[string][]string{
 			"task_management":    {"list_tasks", "list_task_lists", "create_task", "update_task", "delete_task", "complete_task"},
-			"analysis":           {"analyze_quadrant", "analyze_priority"},
+			"analysis":           {"analyze_quadrant", "analyze_priority", "analyze_overdue_health", "analyze_achievement", "detect_decomposition_candidates"},
+			"intelligence":       {"analyze_overdue_health", "resolve_overdue_tasks", "rebalance_longterm_tasks", "detect_decomposition_candidates", "decompose_task_with_provider", "analyze_achievement"},
 			"project_management": {"create_project", "list_projects", "split_project", "split_project_from_markdown", "confirm_project", "sync_project"},
 			"sync":               {"sync_pull", "sync_push"},
 			"provider":           {"list_providers", "get_provider_info", "get_provider_config_template"},

@@ -19,12 +19,13 @@ import (
 
 // Server MCP 服务器
 type Server struct {
-	server         *mcp.Server
-	taskStore      storage.Storage
-	projectStore   project.Store
-	config         *ServerConfig
-	providers      map[string]provider.Provider
-	providerConfig *pkgconfig.ProvidersConfig
+	server             *mcp.Server
+	taskStore          storage.Storage
+	projectStore       project.Store
+	config             *ServerConfig
+	providers          map[string]provider.Provider
+	providerConfig     *pkgconfig.ProvidersConfig
+	intelligenceConfig *pkgconfig.IntelligenceConfig
 }
 
 // ServerConfig 服务器配置
@@ -74,6 +75,13 @@ func WithProviders(providers map[string]provider.Provider) ServerOption {
 func WithProviderConfig(cfg *pkgconfig.ProvidersConfig) ServerOption {
 	return func(s *Server) {
 		s.providerConfig = cfg
+	}
+}
+
+// WithIntelligenceConfig 设置智能治理配置
+func WithIntelligenceConfig(cfg *pkgconfig.IntelligenceConfig) ServerOption {
+	return func(s *Server) {
+		s.intelligenceConfig = cfg
 	}
 }
 
@@ -221,6 +229,9 @@ func (s *Server) registerTools() {
 
 	// 分析工具
 	s.registerAnalysisTools()
+
+	// 智能治理工具
+	s.registerIntelligenceTools()
 
 	// 项目管理工具
 	s.registerProjectTools()
@@ -396,6 +407,111 @@ func (s *Server) registerAnalysisTools() {
 		Description: "按优先级分析任务分布",
 		InputSchema: json.RawMessage(`{"type": "object"}`),
 	}, s.handleAnalyzePriority)
+}
+
+// registerIntelligenceTools 注册智能治理工具
+func (s *Server) registerIntelligenceTools() {
+	s.server.AddTool(&mcp.Tool{
+		Name:        "analyze_overdue_health",
+		Description: "分析逾期任务健康度，输出过载风险、候选处理动作与提问建议",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source": {"type": "string", "description": "按来源筛选（支持简写）"},
+				"list_id": {
+					"oneOf": [
+						{"type": "string"},
+						{"type": "array", "items": {"type": "string"}}
+					],
+					"description": "按清单 ID 筛选"
+				},
+				"include_suggestions": {"type": "boolean", "description": "是否返回建议动作与提问"}
+			}
+		}`),
+	}, s.handleAnalyzeOverdueHealth)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "resolve_overdue_tasks",
+		Description: "批量处理逾期任务（延期/重排/删除/标记拆分）",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"actions": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"task_id": {"type": "string"},
+							"type": {"type": "string", "description": "defer | reschedule | delete | split_then_schedule"},
+							"due_date": {"type": "string", "description": "YYYY-MM-DD，仅 reschedule 可用"}
+						},
+						"required": ["task_id", "type"]
+					}
+				},
+				"dry_run": {"type": "boolean", "description": "是否仅模拟执行"},
+				"confirm_token": {"type": "string", "description": "删除操作确认令牌（默认 confirm-delete）"}
+			},
+			"required": ["actions"]
+		}`),
+	}, s.handleResolveOverdueTasks)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "rebalance_longterm_tasks",
+		Description: "根据短期任务负载自动调配长期无排期任务",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source": {"type": "string", "description": "按来源筛选（支持简写）"},
+				"list_id": {
+					"oneOf": [
+						{"type": "string"},
+						{"type": "array", "items": {"type": "string"}}
+					],
+					"description": "按清单 ID 筛选"
+				},
+				"dry_run": {"type": "boolean", "description": "是否仅模拟执行"}
+			}
+		}`),
+	}, s.handleRebalanceLongTermTasks)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "detect_decomposition_candidates",
+		Description: "识别复杂/抽象且缺少子任务的候选任务，给出拆分建议",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source": {"type": "string", "description": "按来源筛选（支持简写）"},
+				"limit": {"type": "integer", "description": "返回条数（默认 20）"}
+			}
+		}`),
+	}, s.handleDetectDecompositionCandidates)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "decompose_task_with_provider",
+		Description: "基于 provider 能力将任务拆分为子任务建议，并可选落地写入",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"task_id": {"type": "string", "description": "待拆分任务 ID"},
+				"provider": {"type": "string", "description": "目标 provider（支持简写）"},
+				"strategy": {"type": "string", "description": "拆分策略（project_split 或 markdown_split）"},
+				"write_tasks": {"type": "boolean", "description": "是否将预览任务写入本地"}
+			},
+			"required": ["task_id"]
+		}`),
+	}, s.handleDecomposeTaskWithProvider)
+
+	s.server.AddTool(&mcp.Tool{
+		Name:        "analyze_achievement",
+		Description: "分析完成情况并输出成就反馈（趋势、连续性、徽章）",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"window_days": {"type": "integer", "description": "统计窗口（默认 30）"},
+				"compare_previous": {"type": "boolean", "description": "是否对比上一周期"}
+			}
+		}`),
+	}, s.handleAnalyzeAchievement)
 }
 
 // registerProjectTools 注册项目管理工具
@@ -712,27 +828,33 @@ func (s *Server) GetConfig() *ServerConfig {
 func (s *Server) GetTools() map[string]bool {
 	// 返回工具名称集合
 	return map[string]bool{
-		"list_tasks":                   true,
-		"list_task_lists":              true,
-		"create_task":                  true,
-		"update_task":                  true,
-		"delete_task":                  true,
-		"complete_task":                true,
-		"analyze_quadrant":             true,
-		"analyze_priority":             true,
-		"create_project":               true,
-		"list_projects":                true,
-		"split_project":                true,
-		"split_project_from_markdown":  true,
-		"confirm_project":              true,
-		"sync_project":                 true,
-		"get_prompt":                   true,
-		"sync_push":                    true,
-		"sync_pull":                    true,
-		"list_providers":               true,
-		"get_provider_info":            true,
-		"get_provider_config_template": true,
-		"get_server_info":              true,
+		"list_tasks":                      true,
+		"list_task_lists":                 true,
+		"create_task":                     true,
+		"update_task":                     true,
+		"delete_task":                     true,
+		"complete_task":                   true,
+		"analyze_quadrant":                true,
+		"analyze_priority":                true,
+		"analyze_overdue_health":          true,
+		"resolve_overdue_tasks":           true,
+		"rebalance_longterm_tasks":        true,
+		"detect_decomposition_candidates": true,
+		"decompose_task_with_provider":    true,
+		"analyze_achievement":             true,
+		"create_project":                  true,
+		"list_projects":                   true,
+		"split_project":                   true,
+		"split_project_from_markdown":     true,
+		"confirm_project":                 true,
+		"sync_project":                    true,
+		"get_prompt":                      true,
+		"sync_push":                       true,
+		"sync_pull":                       true,
+		"list_providers":                  true,
+		"get_provider_info":               true,
+		"get_provider_config_template":    true,
+		"get_server_info":                 true,
 	}
 }
 
